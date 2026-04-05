@@ -17,6 +17,7 @@ from typing import Any
 
 from hermes_constants import get_hermes_home
 from hermes_cli.meridian_runtime import (
+    EVENT_LOG_PATH,
     acquire_orchestrator_lease,
     act_on_planned_actions,
     build_snapshot_version,
@@ -876,6 +877,40 @@ def _print_status(snapshot: dict[str, Any]) -> None:
         print(f"  Active leases:  {len(worker_leases)}")
     if snapshot.get("drift_detected"):
         print("  Drift detected: yes")
+    recent_events = _recent_meridian_events(limit=5)
+    if recent_events:
+        print("  Recent events:")
+        for event in recent_events:
+            actor = event.get("actor") or event.get("waiting_on") or event.get("platform") or "-"
+            task_id = event.get("task_id") or event.get("active_task_id") or "-"
+            print(
+                "    "
+                f"{event.get('at') or '-'} "
+                f"{event.get('type') or '-'} "
+                f"actor={actor} "
+                f"task={task_id}"
+            )
+
+
+def _recent_meridian_events(limit: int = 5) -> list[dict[str, Any]]:
+    try:
+        lines = EVENT_LOG_PATH.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return []
+
+    events: list[dict[str, Any]] = []
+    for raw in reversed(lines):
+        if len(events) >= limit:
+            break
+        try:
+            event = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
 
 
 def _print_stale(snapshot: dict[str, Any]) -> None:

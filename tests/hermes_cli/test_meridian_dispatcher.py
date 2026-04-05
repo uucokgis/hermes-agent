@@ -550,9 +550,25 @@ def test_meridian_command_status_prints_expected_fields(tmp_path, monkeypatch, c
 
     workspace = _make_workspace(tmp_path)
     state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    event_path = tmp_path / ".hermes" / "meridian" / "events.jsonl"
     monkeypatch.setattr(md, "STATE_PATH", state_path)
+    monkeypatch.setattr(md, "EVENT_LOG_PATH", event_path)
 
     _write_task(workspace / "tasks" / "backlog" / "backlog-task.md", "TASK-B")
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    event_path.write_text(
+        json.dumps(
+            {
+                "id": "evt-1",
+                "type": "task_transitioned",
+                "at": "2026-04-05T12:00:00+00:00",
+                "actor": "philip",
+                "task_id": "TASK-B",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     rc = md.meridian_command(Namespace(meridian_command="status", workspace=str(workspace)))
 
@@ -565,6 +581,8 @@ def test_meridian_command_status_prints_expected_fields(tmp_path, monkeypatch, c
     assert "backlog=1" in out
     assert "Next action:" in out
     assert "Why now:" in out
+    assert "Recent events:" in out
+    assert "task_transitioned" in out
 
 
 def test_meridian_command_stale_prints_stale_tasks(tmp_path, monkeypatch, capsys):
