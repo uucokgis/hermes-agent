@@ -1,31 +1,31 @@
-# Meridian Skills — Deploy Rehberi
+# Meridian Skills — Deploy Guide
 
-Bu klasördeki skill'leri 106 makinesindeki Hermes'e deploy etmek için:
+Deploy the skills in this directory to Hermes on machine 106:
 
 ```bash
-# Mac'ten çalıştır
+# Run from your Mac
 SKILLS_DIR="/Users/umut/Projects/hermes-agent/optional-skills/meridian"
 REMOTE="umut@192.168.1.106"
 REMOTE_DIR="~/.hermes/skills/meridian"
 
 ssh $REMOTE "mkdir -p $REMOTE_DIR/pm $REMOTE_DIR/developer $REMOTE_DIR/reviewer"
 
-scp $SKILLS_DIR/pm/SKILL.md       $REMOTE:$REMOTE_DIR/pm/SKILL.md
+scp $SKILLS_DIR/pm/SKILL.md        $REMOTE:$REMOTE_DIR/pm/SKILL.md
 scp $SKILLS_DIR/developer/SKILL.md $REMOTE:$REMOTE_DIR/developer/SKILL.md
 scp $SKILLS_DIR/reviewer/SKILL.md  $REMOTE:$REMOTE_DIR/reviewer/SKILL.md
 
-echo "Deploy tamamlandı."
+echo "Skills deployed."
 ```
 
-## Skill Tetikleyicileri
+## Skill Triggers
 
-| Skill | Persona | Tetikleyici |
+| Skill | Persona | Trigger phrases |
 |---|---|---|
-| pm/SKILL.md | Philip | "meridian'da gez", "pm olarak bak", "task aç" |
-| developer/SKILL.md | Fatih | "developer olarak çalış", "task al", "kodu yaz" |
-| reviewer/SKILL.md | Matthew | "reviewer olarak bak", "PR'ı review et" |
+| pm/SKILL.md | Philip | "act as Philip", "walk through meridian", "open a task" |
+| developer/SKILL.md | Fatih | "act as Fatih", "act as developer", "pick up a task" |
+| reviewer/SKILL.md | Matthew | "act as Matthew", "review the PR", "review the code" |
 
-## Meridian Docs Deploy (107'ye)
+## Deploy Meridian Docs to 107
 
 ```bash
 MERIDIAN_DOCS="/Users/umut/Projects/hermes-agent/docs/meridian"
@@ -35,4 +35,14 @@ MERIDIAN_PROJ="/home/umut/meridian/docs/llm"
 ssh $REMOTE107 "mkdir -p $MERIDIAN_PROJ"
 scp $MERIDIAN_DOCS/agentic-workflow.md $REMOTE107:$MERIDIAN_PROJ/agentic-workflow.md
 scp $MERIDIAN_DOCS/agent-prompts.md    $REMOTE107:$MERIDIAN_PROJ/agent-prompts.md
+```
+
+## Cron Jobs Setup
+
+After deploying the skills, register the cron jobs on machine 106:
+
+```bash
+# Copy setup script to 106 and run it
+scp $SKILLS_DIR/setup-cron-jobs.sh $REMOTE:~/Hermes-Agent/optional-skills/meridian/setup-cron-jobs.sh
+ssh $REMOTE "cd ~/Hermes-Agent && bash optional-skills/meridian/setup-cron-jobs.sh"
 ```
