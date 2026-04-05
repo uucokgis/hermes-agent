@@ -14,6 +14,27 @@ cd "$HERMES_DIR"
 
 echo "=== Meridian Cron Jobs Setup ==="
 
+# croniter is required for cron expressions (e.g. "0 9 * * *").
+# It is listed in requirements.txt but may not be installed yet.
+python3 -c "import croniter" 2>/dev/null || {
+    echo "Installing croniter..."
+    pip install --quiet --break-system-packages croniter
+}
+
+# Remove any existing Meridian jobs to avoid duplicates on re-run.
+python3 -c "
+import sys
+sys.path.insert(0, '.')
+from cron.jobs import list_jobs, remove_job
+removed = 0
+for j in list_jobs(include_disabled=True):
+    if 'Meridian' in j.get('name', ''):
+        remove_job(j['id'])
+        removed += 1
+if removed:
+    print(f'Removed {removed} existing Meridian job(s).')
+"
+
 # ---------------------------------------------------------------------------
 # 1. FATIH — Developer loop (every 2 hours)
 #    Returns [SILENT] if tasks/ready/ is empty — no Telegram message sent
