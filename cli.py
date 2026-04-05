@@ -1094,7 +1094,7 @@ def save_config_value(key_path: str, value: any) -> bool:
         
         # Save back atomically — write to temp file + fsync + os.replace
         # so an interrupt never leaves config.yaml truncated or empty.
-        from utils import atomic_yaml_write
+        from hermes_utils import atomic_yaml_write
         atomic_yaml_write(config_path, config)
         
         # Enforce owner-only permissions on config files (contain API keys)

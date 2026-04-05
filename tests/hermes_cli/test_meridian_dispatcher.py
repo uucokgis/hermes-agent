@@ -91,6 +91,31 @@ def test_collect_snapshot_auto_discovers_meridian_workspace_from_home(tmp_path, 
     assert snapshot["active_task_id"] == "TASK-B"
 
 
+def test_collect_snapshot_explicit_missing_workspace_raises_clear_error_with_remote_hint(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+    monkeypatch.setattr(
+        md,
+        "load_config",
+        lambda: {
+            "terminal": {
+                "backend": "ssh",
+                "ssh_host": "192.168.1.107",
+                "cwd": "/home/umut/meridian",
+            }
+        },
+    )
+
+    with pytest.raises(FileNotFoundError) as exc:
+        md.collect_meridian_snapshot("/home/umut/meridian")
+
+    message = str(exc.value)
+    assert "does not exist on this machine" in message
+    assert "192.168.1.107:/home/umut/meridian" in message
+
+
 def test_collect_snapshot_keeps_review_loop_locked_to_in_progress_task(tmp_path, monkeypatch):
     from hermes_cli import meridian_dispatcher as md
 

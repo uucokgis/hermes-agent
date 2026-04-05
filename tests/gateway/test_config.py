@@ -1,6 +1,9 @@
 """Tests for gateway configuration management."""
 
 import os
+import subprocess
+import sys
+import textwrap
 from unittest.mock import patch
 
 from gateway.config import (
@@ -137,6 +140,33 @@ class TestGatewayConfigRoundtrip:
 
 
 class TestLoadGatewayConfig:
+    def test_gateway_config_import_survives_shadowed_utils_module(self):
+        script = textwrap.dedent(
+            """
+            import importlib
+            import sys
+            import types
+
+            fake = types.ModuleType("utils")
+            sys.modules["utils"] = fake
+
+            mod = importlib.import_module("gateway.config")
+            assert hasattr(mod, "load_gateway_config")
+            print("ok")
+            """
+        )
+
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=os.getcwd(),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "ok"
+
     def test_bridges_quick_commands_from_config_yaml(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / ".hermes"
         hermes_home.mkdir()

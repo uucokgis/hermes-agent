@@ -1635,7 +1635,7 @@ def save_config(config: Dict[str, Any]):
     if is_managed():
         managed_error("save configuration")
         return
-    from utils import atomic_yaml_write
+    from hermes_utils import atomic_yaml_write
 
     ensure_hermes_home()
     config_path = get_config_path()

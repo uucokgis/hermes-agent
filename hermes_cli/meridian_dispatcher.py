@@ -33,7 +33,8 @@ from hermes_cli.meridian_workflow import (
     list_task_refs,
     locate_task,
 )
-from utils import atomic_json_write
+from hermes_cli.config import load_config
+from hermes_utils import atomic_json_write
 
 
 DISPATCHABLE_PERSONAS = frozenset({"philip", "fatih", "matthew"})
@@ -65,10 +66,41 @@ AUTO_DISCOVERY_CANDIDATES = (
 )
 
 
+def _terminal_remote_hint() -> tuple[str | None, str | None]:
+    try:
+        config = load_config()
+    except Exception:
+        return None, None
+    terminal = config.get("terminal") or {}
+    backend = str(terminal.get("backend") or "").strip().lower()
+    if backend != "ssh":
+        return None, None
+    return (
+        str(terminal.get("ssh_host") or "").strip() or None,
+        str(terminal.get("cwd") or "").strip() or None,
+    )
+
+
+def _ensure_local_workspace_exists(workspace_path: Path) -> None:
+    if workspace_path.exists():
+        return
+    ssh_host, remote_cwd = _terminal_remote_hint()
+    if ssh_host:
+        remote_note = f" Remote terminal backend points to {ssh_host}:{remote_cwd or '~'}."
+    else:
+        remote_note = ""
+    raise FileNotFoundError(
+        f"Meridian workspace does not exist on this machine: {workspace_path}.{remote_note} "
+        "Run this command on the machine that has the Meridian checkout, or provide a local workspace path."
+    )
+
+
 def _resolve_workspace_path(workspace: str | Path | None = None) -> Path:
     explicit = str(workspace).strip() if workspace is not None else ""
     if explicit and explicit != ".":
-        return Path(explicit).expanduser().resolve()
+        candidate = Path(explicit).expanduser().resolve()
+        _ensure_local_workspace_exists(candidate)
+        return candidate
 
     env_workspace = (os.getenv("HERMES_MERIDIAN_WORKSPACE") or "").strip()
     if env_workspace:
@@ -112,6 +144,8 @@ def _resolve_workspace_path(workspace: str | Path | None = None) -> Path:
     if task_roots:
         return sorted(task_roots, key=_candidate_rank)[0]
 
+    if explicit:
+        _ensure_local_workspace_exists(Path(explicit).expanduser().resolve())
     return cwd
 
 

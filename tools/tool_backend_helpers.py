@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict
 
-from utils import env_var_enabled
+from hermes_utils import env_var_enabled
 
 _DEFAULT_BROWSER_PROVIDER = "local"
 _DEFAULT_MODAL_MODE = "auto"

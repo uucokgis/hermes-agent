@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from utils import atomic_json_write
+from hermes_utils import atomic_json_write
 
 import requests
 

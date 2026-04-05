@@ -702,7 +702,7 @@ class BatchRunner:
         """
         checkpoint_data["last_updated"] = datetime.now().isoformat()
 
-        from utils import atomic_json_write
+        from hermes_utils import atomic_json_write
         if lock:
             with lock:
                 atomic_json_write(self.checkpoint_file, checkpoint_data)
@@ -1282,4 +1282,3 @@ def main(
 
 if __name__ == "__main__":
     fire.Fire(main)
-
