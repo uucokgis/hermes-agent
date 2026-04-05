@@ -231,7 +231,7 @@ hermes cron <list|create|edit|pause|resume|run|remove|status|tick>
 | Subcommand | Description |
 |------------|-------------|
 | `list` | Show scheduled jobs. |
-| `create` / `add` | Create a scheduled job from a prompt, optionally attaching one or more skills via repeated `--skill`. |
+| `create` / `add` | Create a scheduled job from a prompt, optionally attaching one or more skills via repeated `--skill`. Use `--asap` to queue the first run on the next scheduler tick. |
 | `edit` | Update a job's schedule, prompt, name, delivery, repeat count, or attached skills. Supports `--clear-skills`, `--add-skill`, and `--remove-skill`. |
 | `pause` | Pause a job without deleting it. |
 | `resume` | Resume a paused job and compute its next future run. |

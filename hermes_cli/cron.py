@@ -157,6 +157,13 @@ def cron_create(args):
     if not result.get("success"):
         print(color(f"Failed to create job: {result.get('error', 'unknown error')}", Colors.RED))
         return 1
+    if getattr(args, "asap", False):
+        trigger = _cron_api(action="run", job_id=result["job_id"])
+        if not trigger.get("success"):
+            print(color(f"Failed to mark job for immediate run: {trigger.get('error', 'unknown error')}", Colors.RED))
+            return 1
+        result["job"] = trigger.get("job", result.get("job", {}))
+        result["next_run_at"] = result["job"].get("next_run_at", result.get("next_run_at"))
     print(color(f"Created job: {result['job_id']}", Colors.GREEN))
     print(f"  Name: {result['name']}")
     print(f"  Schedule: {result['schedule']}")
@@ -166,6 +173,8 @@ def cron_create(args):
     if job_data.get("script"):
         print(f"  Script: {job_data['script']}")
     print(f"  Next run: {result['next_run_at']}")
+    if getattr(args, "asap", False):
+        print("  ASAP: queued for the next scheduler tick.")
     return 0
 
 

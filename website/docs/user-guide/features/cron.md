@@ -30,6 +30,7 @@ Cron-run sessions cannot recursively create more cron jobs. Hermes disables cron
 /cron add 30m "Remind me to check the build"
 /cron add "every 2h" "Check server status"
 /cron add "every 1h" "Summarize new feed items" --skill blogwatcher
+/cron add "every 90m" "Run Meridian E2E checks and summarize failures" --asap
 /cron add "every 1h" "Use both skills and combine the result" --skill blogwatcher --skill find-nearby
 ```
 
@@ -38,6 +39,7 @@ Cron-run sessions cannot recursively create more cron jobs. Hermes disables cron
 ```bash
 hermes cron create "every 2h" "Check server status"
 hermes cron create "every 1h" "Summarize new feed items" --skill blogwatcher
+hermes cron create "every 90m" "Run Meridian E2E checks and summarize failures" --asap
 hermes cron create "every 1h" "Use both skills and combine the result" \
   --skill blogwatcher \
   --skill find-nearby \
@@ -150,6 +152,17 @@ What they do:
 - `resume` — re-enable the job and compute the next future run
 - `run` — trigger the job on the next scheduler tick
 - `remove` — delete it entirely
+
+### `--asap` on create
+
+If you want a newly created recurring job to start right away, add `--asap` when creating it:
+
+```bash
+hermes cron create "every 1h" "Check Meridian E2E status" --asap
+/cron add "every 1h" "Check Meridian E2E status" --asap
+```
+
+This keeps the recurring schedule intact and also queues the first run for the next scheduler tick.
 
 ## How it works
 

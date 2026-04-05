@@ -96,6 +96,8 @@ class TestCronCommandLifecycle:
                 repeat=None,
                 skill=None,
                 skills=["blogwatcher", "find-nearby"],
+                script=None,
+                asap=False,
             )
         )
         out = capsys.readouterr().out
@@ -105,3 +107,27 @@ class TestCronCommandLifecycle:
         assert len(jobs) == 1
         assert jobs[0]["skills"] == ["blogwatcher", "find-nearby"]
         assert jobs[0]["name"] == "Skill combo"
+
+    def test_create_with_asap_triggers_next_tick(self, tmp_cron_dir, capsys):
+        cron_command(
+            Namespace(
+                cron_command="create",
+                schedule="every 90m",
+                prompt="Run the E2E checks",
+                name="E2E ASAP",
+                deliver=None,
+                repeat=None,
+                skill=None,
+                skills=None,
+                script=None,
+                asap=True,
+            )
+        )
+        out = capsys.readouterr().out
+        assert "Created job" in out
+        assert "ASAP: queued for the next scheduler tick." in out
+
+        jobs = list_jobs()
+        assert len(jobs) == 1
+        assert jobs[0]["schedule_display"] == "every 90m"
+        assert jobs[0]["state"] == "scheduled"

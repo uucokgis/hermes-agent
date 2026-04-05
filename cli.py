@@ -3723,6 +3723,7 @@ class HermesCLI:
                 "remove_skills": [],
                 "clear_skills": False,
                 "all": False,
+                "asap": False,
                 "prompt": None,
                 "schedule": None,
                 "positionals": [],
@@ -3758,6 +3759,9 @@ class HermesCLI:
                 elif token == "--all":
                     opts["all"] = True
                     i += 1
+                elif token in {"--asap", "-a"}:
+                    opts["asap"] = True
+                    i += 1
                 elif token == "--prompt" and i + 1 < len(tokens):
                     opts["prompt"] = tokens[i + 1]
                     i += 2
@@ -3780,6 +3784,7 @@ class HermesCLI:
             print("  Commands:")
             print("    /cron list")
             print('    /cron add "every 2h" "Check server status" [--skill blogwatcher]')
+            print('    /cron add "every 2h" "Check server status" --asap')
             print('    /cron edit <job_id> --schedule "every 4h" --prompt "New task"')
             print("    /cron edit <job_id> --skill blogwatcher --skill find-nearby")
             print("    /cron edit <job_id> --remove-skill blogwatcher")
@@ -3858,11 +3863,20 @@ class HermesCLI:
                 skills=skills or None,
             )
             if result.get("success"):
+                if opts["asap"]:
+                    triggered = _cron_api(action="run", job_id=result["job_id"])
+                    if not triggered.get("success"):
+                        print(f"(x_x) Failed to mark job for immediate run: {triggered.get('error')}")
+                        return
+                    result["job"] = triggered.get("job", result.get("job", {}))
+                    result["next_run_at"] = result["job"].get("next_run_at", result.get("next_run_at"))
                 print(f"(^_^)b Created job: {result['job_id']}")
                 print(f"  Schedule: {result['schedule']}")
                 if result.get("skills"):
                     print(f"  Skills: {', '.join(result['skills'])}")
                 print(f"  Next run: {result['next_run_at']}")
+                if opts["asap"]:
+                    print("  ASAP: queued for the next scheduler tick.")
             else:
                 print(f"(x_x) Failed to create job: {result.get('error')}")
             return

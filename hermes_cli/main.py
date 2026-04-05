@@ -4382,6 +4382,11 @@ For more help on a command:
     cron_create.add_argument("--repeat", type=int, help="Optional repeat count")
     cron_create.add_argument("--skill", dest="skills", action="append", help="Attach a skill. Repeat to add multiple skills.")
     cron_create.add_argument("--script", help="Path to a Python script whose stdout is injected into the prompt each run")
+    cron_create.add_argument(
+        "--asap", "-a",
+        action="store_true",
+        help="Also queue the new job for the next scheduler tick",
+    )
 
     # cron edit
     cron_edit = cron_subparsers.add_parser("edit", help="Edit an existing scheduled job")

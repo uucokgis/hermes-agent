@@ -168,7 +168,7 @@ hermes sessions stats       Session store statistics
 
 ```
 hermes cron list            List jobs (--all for disabled)
-hermes cron create SCHED    Create: '30m', 'every 2h', '0 9 * * *'
+hermes cron create SCHED    Create: '30m', 'every 2h', '0 9 * * *' (--asap queues next tick)
 hermes cron edit ID         Edit schedule, prompt, delivery
 hermes cron pause/resume ID Control job state
 hermes cron run ID          Trigger on next tick

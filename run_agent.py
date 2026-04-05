@@ -90,6 +90,10 @@ from agent.model_metadata import (
 from agent.context_compressor import ContextCompressor
 from agent.prompt_caching import apply_anthropic_cache_control
 from agent.prompt_builder import build_skills_system_prompt, build_context_files_prompt, load_soul_md, TOOL_USE_ENFORCEMENT_GUIDANCE, TOOL_USE_ENFORCEMENT_MODELS, DEVELOPER_ROLE_MODELS, GOOGLE_MODEL_OPERATIONAL_GUIDANCE
+from agent.auto_workflows import (
+    build_meridian_workflow_overlay,
+    should_auto_route_meridian_message,
+)
 from agent.usage_pricing import estimate_usage_cost, normalize_usage
 from agent.display import (
     KawaiiSpinner, build_tool_preview as _build_tool_preview,
@@ -6457,6 +6461,17 @@ class AIAgent:
         self._persist_user_message_override = persist_user_message
         # Generate unique task_id if not provided to isolate VMs between concurrent tasks
         effective_task_id = task_id or str(uuid.uuid4())
+
+        if should_auto_route_meridian_message(
+            user_message,
+            delegate_depth=getattr(self, "_delegate_depth", 0),
+        ):
+            overlay = build_meridian_workflow_overlay(user_message, task_id=effective_task_id)
+            if overlay:
+                if persist_user_message is None:
+                    persist_user_message = user_message
+                    self._persist_user_message_override = persist_user_message
+                user_message = overlay
         
         # Reset retry counters and iteration budget at the start of each turn
         # so subagent usage from a previous turn doesn't eat into the next one.
