@@ -2469,6 +2469,12 @@ def cmd_cron(args):
     cron_command(args)
 
 
+def cmd_meridian(args):
+    """Meridian workflow status and manual dispatch."""
+    from hermes_cli.meridian_dispatcher import meridian_command
+    meridian_command(args)
+
+
 def cmd_webhook(args):
     """Webhook subscription management."""
     from hermes_cli.webhook import webhook_command
@@ -4422,6 +4428,43 @@ For more help on a command:
     cron_subparsers.add_parser("tick", help="Run due jobs once and exit")
 
     cron_parser.set_defaults(func=cmd_cron)
+
+    # =========================================================================
+    # meridian command
+    # =========================================================================
+    meridian_parser = subparsers.add_parser(
+        "meridian",
+        help="Meridian task workflow status and manual dispatch",
+        description="Inspect Meridian task queues and run a lightweight manual dispatcher",
+    )
+    meridian_parser.add_argument(
+        "--workspace",
+        default=".",
+        help="Workspace root containing the tasks/ directory (default: current directory)",
+    )
+    meridian_subparsers = meridian_parser.add_subparsers(dest="meridian_command")
+
+    meridian_status = meridian_subparsers.add_parser(
+        "status",
+        help="Show Meridian workflow status",
+    )
+    meridian_status.add_argument(
+        "--workspace",
+        default=".",
+        help="Workspace root containing the tasks/ directory (default: current directory)",
+    )
+
+    meridian_dispatch = meridian_subparsers.add_parser(
+        "dispatch",
+        help="Run one manual Meridian dispatch pass",
+    )
+    meridian_dispatch.add_argument(
+        "--workspace",
+        default=".",
+        help="Workspace root containing the tasks/ directory (default: current directory)",
+    )
+
+    meridian_parser.set_defaults(func=cmd_meridian)
 
     # =========================================================================
     # webhook command
