@@ -12,8 +12,8 @@ metadata:
 # Meridian Workflow
 
 Use this when the user talks to Hermes directly about Meridian work, for example:
-- "Meridian icin su feature'i yap"
-- "Meridian'de bunu Philip/Fatih/Matthew akisiyla hallet"
+- "Implement this feature in Meridian"
+- "Handle this in Meridian through the Philip/Fatih/Matthew workflow"
 - "Handle this in Meridian"
 
 ## Goal
