@@ -42,6 +42,16 @@ Human confirmation is required when:
 - never auto-merge risky or ambiguous work
 - do not block on minor nits alone
 
+## Workflow Rules
+
+- Review work only from `tasks/review/` unless the dispatcher explicitly surfaces stale triage work.
+- Use `task_transition` for every review outcome:
+  - `review -> done` for approved low-risk work
+  - `review -> in_progress` for concrete requested changes
+  - `review -> waiting_human` when human confirmation is required
+- Treat `waiting_human` as a real workflow state. Do not hide it in notes or ad hoc flags.
+- If you discover follow-up debt, create a linked task intentionally rather than overloading the current review item.
+
 ## Done Condition
 
 Matthew is done when one of these is true:

@@ -9,22 +9,55 @@ such as the last transition timestamp and dispatch bookkeeping.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from hermes_constants import get_hermes_home
+from hermes_cli.meridian_runtime import (
+    acquire_orchestrator_lease,
+    act_on_planned_actions,
+    build_snapshot_version,
+    emit_meridian_event,
+    finalize_orchestrator_lease,
+    isoformat as runtime_isoformat,
+    parse_iso_datetime,
+    prune_expired_worker_leases,
+    utcnow as runtime_utcnow,
+)
+from hermes_cli.meridian_workflow import (
+    DISPATCH_VISIBLE_QUEUES,
+    TaskRef,
+    list_task_refs,
+    locate_task,
+)
 from utils import atomic_json_write
 
 
-QUEUE_NAMES = ("backlog", "ready", "in_progress", "review", "done", "debt")
 DISPATCHABLE_PERSONAS = frozenset({"philip", "fatih", "matthew"})
+READY_TARGET_DEFAULT = 2
+STALE_TIMEOUTS = {
+    "in_progress": timedelta(hours=48),
+    "review": timedelta(hours=24),
+    "waiting_human": timedelta(hours=72),
+}
+PRIORITY_RANK = {
+    "critical": 0,
+    "p0": 0,
+    "high": 1,
+    "p1": 1,
+    "medium": 2,
+    "normal": 2,
+    "p2": 2,
+    "low": 3,
+    "p3": 3,
+    "debt": 4,
+}
 STATE_PATH = get_hermes_home() / "meridian" / "workflow_state.json"
 
 
 def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return runtime_isoformat(runtime_utcnow())
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -36,61 +69,8 @@ def _read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
-def _task_dirs(workspace: Path) -> dict[str, Path]:
-    tasks_root = workspace / "tasks"
-    return {name: tasks_root / name for name in QUEUE_NAMES}
-
-
-def _list_task_files(directory: Path) -> list[Path]:
-    if not directory.exists():
-        return []
-    return sorted(
-        path
-        for path in directory.iterdir()
-        if path.is_file() and not path.name.startswith(".")
-    )
-
-
-def _extract_field(text: str, key: str) -> str | None:
-    prefix = f"{key}:"
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.lower().startswith(prefix):
-            value = stripped[len(prefix):].strip().strip("'\"")
-            return value or None
-    return None
-
-
-@dataclass(frozen=True)
-class TaskRef:
-    queue: str
-    path: Path
-    task_id: str
-    filename: str
-    branch: str | None = None
-
-
-def _read_task_ref(queue: str, path: Path) -> TaskRef:
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        text = ""
-    task_id = _extract_field(text, "id") or path.stem
-    branch = _extract_field(text, "pr_branch") or _extract_field(text, "branch")
-    return TaskRef(
-        queue=queue,
-        path=path,
-        task_id=task_id,
-        filename=path.name,
-        branch=branch,
-    )
-
-
 def _queue_map(workspace: Path) -> dict[str, list[TaskRef]]:
-    queues: dict[str, list[TaskRef]] = {}
-    for name, directory in _task_dirs(workspace).items():
-        queues[name] = [_read_task_ref(name, path) for path in _list_task_files(directory)]
-    return queues
+    return list_task_refs(workspace)
 
 
 def _pick_first(tasks: list[TaskRef]) -> TaskRef | None:
@@ -107,7 +87,299 @@ def _pick_matching(tasks: list[TaskRef], task_id: str | None) -> TaskRef | None:
 
 
 def _queue_counts(queues: dict[str, list[TaskRef]]) -> dict[str, int]:
-    return {name: len(queues[name]) for name in QUEUE_NAMES}
+    return {name: len(queues.get(name, [])) for name in DISPATCH_VISIBLE_QUEUES}
+
+
+def _task_metadata(task: TaskRef) -> dict[str, Any]:
+    return dict(task.metadata or {})
+
+
+def _task_updated_at(task: TaskRef) -> datetime:
+    metadata = _task_metadata(task)
+    for key in ("updated_at", "last_transition_at", "claimed_at", "created_at"):
+        parsed = parse_iso_datetime(metadata.get(key))
+        if parsed:
+            return parsed
+    return datetime.fromtimestamp(task.path.stat().st_mtime, tz=timezone.utc)
+
+
+def _task_created_at(task: TaskRef) -> datetime:
+    metadata = _task_metadata(task)
+    for key in ("created_at", "updated_at", "last_transition_at"):
+        parsed = parse_iso_datetime(metadata.get(key))
+        if parsed:
+            return parsed
+    return datetime.fromtimestamp(task.path.stat().st_mtime, tz=timezone.utc)
+
+
+def _priority_rank(task: TaskRef) -> tuple[int, str]:
+    raw = _task_metadata(task).get("priority", "")
+    if isinstance(raw, (int, float)):
+        return int(raw), str(raw)
+    normalized = str(raw).strip().lower()
+    return PRIORITY_RANK.get(normalized, 9), normalized
+
+
+def _depends_on(task: TaskRef) -> list[str]:
+    raw = _task_metadata(task).get("depends_on")
+    if raw in (None, "", []):
+        return []
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    if isinstance(raw, str):
+        return [part.strip() for part in raw.split(",") if part.strip()]
+    return [str(raw).strip()]
+
+
+def _dependencies_ready(task: TaskRef, done_ids: set[str]) -> bool:
+    deps = _depends_on(task)
+    return all(dep in done_ids for dep in deps)
+
+
+def _is_promotable_backlog_task(task: TaskRef, done_ids: set[str]) -> bool:
+    metadata = _task_metadata(task)
+    acceptance = metadata.get("acceptance_criteria")
+    if acceptance in (None, "", []):
+        return False
+    if metadata.get("blocked_reason") or metadata.get("waiting_on"):
+        return False
+    return _dependencies_ready(task, done_ids)
+
+
+def _parse_duration(value: Any) -> timedelta | None:
+    if isinstance(value, (int, float)):
+        return timedelta(seconds=float(value))
+    if not isinstance(value, str):
+        return None
+    text = value.strip().lower()
+    if not text:
+        return None
+    unit_map = {
+        "h": 3600,
+        "hr": 3600,
+        "hrs": 3600,
+        "hour": 3600,
+        "hours": 3600,
+        "d": 86400,
+        "day": 86400,
+        "days": 86400,
+        "m": 60,
+        "min": 60,
+        "mins": 60,
+        "minute": 60,
+        "minutes": 60,
+    }
+    for suffix, seconds in unit_map.items():
+        if text.endswith(suffix):
+            number = text[: -len(suffix)].strip()
+            try:
+                return timedelta(seconds=float(number) * seconds)
+            except ValueError:
+                return None
+    return None
+
+
+def _stale_deadline(task: TaskRef) -> datetime | None:
+    metadata = _task_metadata(task)
+    raw = metadata.get("stale_after")
+    parsed_time = parse_iso_datetime(raw)
+    if parsed_time:
+        return parsed_time
+    parsed_duration = _parse_duration(raw)
+    if parsed_duration:
+        return _task_updated_at(task) + parsed_duration
+    timeout = STALE_TIMEOUTS.get(task.queue)
+    if timeout is None:
+        return None
+    return _task_updated_at(task) + timeout
+
+
+def _stale_reason(task: TaskRef) -> str:
+    if task.queue == "review":
+        return "review_sla_exceeded"
+    if task.queue == "waiting_human":
+        return "human_confirmation_overdue"
+    return "implementation_stale"
+
+
+def _detect_stale_tasks(queues: dict[str, list[TaskRef]], *, now: datetime) -> list[dict[str, Any]]:
+    stale_entries: list[dict[str, Any]] = []
+    for queue in ("in_progress", "review", "waiting_human"):
+        for task in queues.get(queue, []):
+            deadline = _stale_deadline(task)
+            if deadline and deadline <= now:
+                stale_entries.append(
+                    {
+                        "task_id": task.task_id,
+                        "queue": queue,
+                        "reason": _stale_reason(task),
+                        "updated_at": _task_updated_at(task).isoformat(),
+                        "stale_since": deadline.isoformat(),
+                        "actor": "matthew" if queue != "waiting_human" else "human",
+                    }
+                )
+    stale_entries.sort(key=lambda entry: (entry["stale_since"], entry["task_id"]))
+    return stale_entries
+
+
+def _select_task(tasks: list[TaskRef], *, preferred_task_id: str | None = None) -> TaskRef | None:
+    if not tasks:
+        return None
+
+    def sort_key(task: TaskRef) -> tuple[int, int, datetime, str]:
+        preferred_rank = 0 if preferred_task_id and task.task_id == preferred_task_id else 1
+        priority_rank, _ = _priority_rank(task)
+        return (preferred_rank, priority_rank, _task_created_at(task), task.task_id)
+
+    return sorted(tasks, key=sort_key)[0]
+
+
+def _build_planned_actions(
+    queues: dict[str, list[TaskRef]],
+    *,
+    state: dict[str, Any],
+    now: datetime,
+    ready_target: int,
+    review_loop_task_id: str | None,
+    waiting_human: bool,
+) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    stale_entries = _detect_stale_tasks(queues, now=now)
+    stale_by_task = {entry["task_id"]: entry for entry in stale_entries}
+    done_ids = {task.task_id for task in queues.get("done", [])}
+
+    if waiting_human:
+        waiting_task = _pick_first(queues.get("waiting_human", []))
+        actions.append(
+            {
+                "kind": "hold_waiting_human",
+                "actor": "human",
+                "task_id": waiting_task.task_id if waiting_task else review_loop_task_id,
+                "queue": "waiting_human",
+                "reason": "human_confirmation_required",
+                "dispatchable": False,
+            }
+        )
+
+    review_task = _select_task(
+        queues.get("review", []),
+        preferred_task_id=review_loop_task_id,
+    )
+    if review_task:
+        stale = stale_by_task.get(review_task.task_id)
+        actions.append(
+            {
+                "kind": "review_task" if not stale else "triage_stale_review",
+                "actor": "matthew",
+                "task_id": review_task.task_id,
+                "queue": "review",
+                "reason": stale["reason"] if stale else "review_queue_non_empty",
+                "dispatchable": True,
+                "stale": bool(stale),
+            }
+        )
+
+    in_progress_task = _select_task(
+        queues.get("in_progress", []),
+        preferred_task_id=review_loop_task_id,
+    )
+    if in_progress_task:
+        stale = stale_by_task.get(in_progress_task.task_id)
+        actions.append(
+            {
+                "kind": "continue_review_loop" if review_loop_task_id == in_progress_task.task_id else "continue_in_progress",
+                "actor": "fatih" if not stale else "matthew",
+                "task_id": in_progress_task.task_id,
+                "queue": "in_progress",
+                "reason": stale["reason"] if stale else "active_delivery_work",
+                "dispatchable": not waiting_human if not stale else True,
+                "stale": bool(stale),
+            }
+        )
+    elif queues.get("ready"):
+        ready_task = _select_task(
+            queues["ready"],
+            preferred_task_id=review_loop_task_id,
+        )
+        if ready_task:
+            actions.append(
+                {
+                    "kind": "start_ready_task",
+                    "actor": "fatih",
+                    "task_id": ready_task.task_id,
+                    "queue": "ready",
+                    "reason": "ready_queue_non_empty",
+                    "dispatchable": not waiting_human,
+                }
+            )
+
+    ready_count = len(queues.get("ready", []))
+    promotable = [
+        task
+        for task in queues.get("backlog", [])
+        if _is_promotable_backlog_task(task, done_ids)
+    ]
+    promotable = sorted(
+        promotable,
+        key=lambda task: (_priority_rank(task)[0], _task_created_at(task), task.task_id),
+    )
+    if ready_count < ready_target and promotable:
+        deficit = min(ready_target - ready_count, len(promotable))
+        actions.append(
+            {
+                "kind": "replenish_ready",
+                "actor": "philip",
+                "queue": "backlog",
+                "task_id": promotable[0].task_id,
+                "task_ids": [task.task_id for task in promotable[:deficit]],
+                "reason": "ready_below_target",
+                "dispatchable": True,
+                "deficit": deficit,
+            }
+        )
+    elif not queues.get("review") and not queues.get("in_progress") and not queues.get("ready"):
+        backlog_task = _select_task(queues.get("backlog", []))
+        if backlog_task:
+            actions.append(
+                {
+                    "kind": "groom_backlog",
+                    "actor": "philip",
+                    "task_id": backlog_task.task_id,
+                    "queue": "backlog",
+                    "reason": "delivery_idle_backlog_available",
+                    "dispatchable": True,
+                }
+            )
+        elif queues.get("debt"):
+            debt_task = _select_task(queues["debt"])
+            actions.append(
+                {
+                    "kind": "triage_debt",
+                    "actor": "philip",
+                    "task_id": debt_task.task_id if debt_task else None,
+                    "queue": "debt",
+                    "reason": "delivery_idle_debt_available",
+                    "dispatchable": True,
+                }
+            )
+
+    waiting_human_stale = [
+        entry for entry in stale_entries if entry["queue"] == "waiting_human"
+    ]
+    if waiting_human_stale:
+        actions.append(
+            {
+                "kind": "remind_waiting_human",
+                "actor": "human",
+                "task_id": waiting_human_stale[0]["task_id"],
+                "queue": "waiting_human",
+                "reason": waiting_human_stale[0]["reason"],
+                "dispatchable": False,
+                "stale": True,
+            }
+        )
+
+    return actions
 
 
 def _normalize_waiting_human(state: dict[str, Any]) -> bool:
@@ -119,6 +391,10 @@ def _review_loop_task_id(queues: dict[str, list[TaskRef]], state: dict[str, Any]
     if review_task:
         return review_task.task_id
 
+    waiting_human_task = _pick_first(queues["waiting_human"])
+    if waiting_human_task:
+        return waiting_human_task.task_id
+
     prior = state.get("review_loop_task_id")
     if _pick_matching(queues["in_progress"], prior):
         return prior
@@ -127,13 +403,30 @@ def _review_loop_task_id(queues: dict[str, list[TaskRef]], state: dict[str, Any]
     return None
 
 
-def collect_meridian_snapshot(workspace: str | Path | None = None, *, state: dict[str, Any] | None = None) -> dict[str, Any]:
+def collect_meridian_snapshot(
+    workspace: str | Path | None = None,
+    *,
+    state: dict[str, Any] | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
     """Collect a Meridian workflow snapshot from the task queues."""
     workspace_path = Path(workspace or ".").resolve()
     state = dict(state or _read_json(STATE_PATH))
     queues = _queue_map(workspace_path)
+    current_time = now or runtime_utcnow()
+    ready_target = int(state.get("ready_target") or READY_TARGET_DEFAULT)
     review_loop_task_id = _review_loop_task_id(queues, state)
-    waiting_human = _normalize_waiting_human(state)
+    waiting_human_task = _pick_first(queues["waiting_human"])
+    waiting_human = bool(waiting_human_task)
+    stale_tasks = _detect_stale_tasks(queues, now=current_time)
+    planned_actions = _build_planned_actions(
+        queues,
+        state=state,
+        now=current_time,
+        ready_target=ready_target,
+        review_loop_task_id=review_loop_task_id,
+        waiting_human=waiting_human,
+    )
 
     active_persona = "idle"
     workflow_state = "idle"
@@ -145,7 +438,8 @@ def collect_meridian_snapshot(workspace: str | Path | None = None, *, state: dic
         workflow_state = "waiting_human"
         waiting_on = "human_confirmation"
         active_task = (
-            _pick_matching(queues["review"], review_loop_task_id)
+            waiting_human_task
+            or _pick_matching(queues["review"], review_loop_task_id)
             or _pick_matching(queues["in_progress"], review_loop_task_id)
             or _pick_matching(queues["ready"], review_loop_task_id)
         )
@@ -183,6 +477,9 @@ def collect_meridian_snapshot(workspace: str | Path | None = None, *, state: dic
         "waiting_human": waiting_human,
         "review_loop_task_id": review_loop_task_id,
         "current_branch": active_task.branch if active_task else None,
+        "ready_target": ready_target,
+        "planned_actions": planned_actions,
+        "stale_tasks": stale_tasks,
     }
 
 
@@ -198,6 +495,8 @@ def persist_meridian_snapshot(snapshot: dict[str, Any], *, previous_state: dict[
         "waiting_human",
         "review_loop_task_id",
         "current_branch",
+        "planned_actions",
+        "stale_tasks",
     )
     changed = any(previous_state.get(key) != snapshot.get(key) for key in transition_keys)
     last_transition_time = previous_state.get("last_transition_time") or _utcnow_iso()
@@ -220,36 +519,147 @@ def _dispatch_target_changed(state: dict[str, Any], snapshot: dict[str, Any]) ->
     )
 
 
-def dispatch_meridian(workspace: str | Path | None = None) -> dict[str, Any]:
+def dispatch_meridian(
+    workspace: str | Path | None = None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
     """Run one manual dispatch pass and update orchestration metadata."""
     previous_state = _read_json(STATE_PATH)
-    snapshot = collect_meridian_snapshot(workspace, state=previous_state)
+    current_time = now or runtime_utcnow()
+    snapshot = collect_meridian_snapshot(workspace, state=previous_state, now=current_time)
     merged = persist_meridian_snapshot(snapshot, previous_state=previous_state)
 
-    should_dispatch = (
-        snapshot["active_persona"] in DISPATCHABLE_PERSONAS
-        and snapshot["waiting_on"] in DISPATCHABLE_PERSONAS
-        and not snapshot["waiting_human"]
-        and (
-            previous_state.get("last_dispatched_persona") != snapshot["active_persona"]
-            or previous_state.get("last_dispatched_task_id") != snapshot["active_task_id"]
-            or previous_state.get("last_dispatched_transition_time") != merged["last_transition_time"]
-            or _dispatch_target_changed(previous_state, snapshot)
-        )
+    acquired, orchestrator_lease, lease_reason = acquire_orchestrator_lease(
+        merged,
+        workspace=snapshot["workspace"],
+        now=current_time,
+    )
+    merged["snapshot_version"] = build_snapshot_version(snapshot)
+
+    if not acquired:
+        merged["should_dispatch"] = False
+        merged["dispatch_blocked_reason"] = lease_reason
+        merged["orchestrator_lease"] = orchestrator_lease
+        atomic_json_write(STATE_PATH, merged)
+        return merged
+
+    dispatched_actions, suppressed_actions, worker_leases = act_on_planned_actions(
+        snapshot,
+        state=merged,
+        run_id=orchestrator_lease["run_id"],
+        now=current_time,
     )
 
-    if should_dispatch:
+    merged["orchestrator_lease"] = finalize_orchestrator_lease(
+        orchestrator_lease,
+        now=current_time,
+    )
+    merged["worker_leases"] = worker_leases
+    merged["last_dispatch_results"] = {
+        "run_id": orchestrator_lease["run_id"],
+        "snapshot_version": merged["snapshot_version"],
+        "dispatched_actions": dispatched_actions,
+        "suppressed_actions": suppressed_actions,
+        "completed_at": runtime_isoformat(current_time),
+    }
+
+    should_dispatch = bool(dispatched_actions)
+    if dispatched_actions:
+        primary = dispatched_actions[0]
         merged.update(
             {
-                "last_dispatched_persona": snapshot["active_persona"],
-                "last_dispatched_task_id": snapshot["active_task_id"],
+                "last_dispatched_persona": primary["actor"],
+                "last_dispatched_task_id": primary.get("task_id"),
                 "last_dispatched_transition_time": merged["last_transition_time"],
-                "last_dispatch_at": _utcnow_iso(),
+                "last_dispatch_at": runtime_isoformat(current_time),
             }
         )
-        atomic_json_write(STATE_PATH, merged)
 
     merged["should_dispatch"] = should_dispatch
+    atomic_json_write(STATE_PATH, merged)
+    emit_meridian_event(
+        "meridian_dispatch_completed",
+        {
+            "workspace": snapshot["workspace"],
+            "run_id": orchestrator_lease["run_id"],
+            "snapshot_version": merged["snapshot_version"],
+            "dispatched_count": len(dispatched_actions),
+            "suppressed_count": len(suppressed_actions),
+        },
+        now=current_time,
+    )
+    return merged
+
+
+def reconcile_meridian(
+    workspace: str | Path | None = None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Rebuild derived Meridian state and emit reconcile/drift events."""
+    previous_state = _read_json(STATE_PATH)
+    current_time = now or runtime_utcnow()
+    snapshot = collect_meridian_snapshot(workspace, state=previous_state, now=current_time)
+    merged = persist_meridian_snapshot(snapshot, previous_state=previous_state)
+    previous_version = previous_state.get("snapshot_version")
+    merged["snapshot_version"] = build_snapshot_version(snapshot)
+    merged["worker_leases"] = prune_expired_worker_leases(merged, now=current_time)
+
+    drift_detected = bool(previous_version and previous_version != merged["snapshot_version"])
+    reconcile_event = emit_meridian_event(
+        "meridian_reconciled",
+        {
+            "workspace": snapshot["workspace"],
+            "snapshot_version": merged["snapshot_version"],
+            "drift_detected": drift_detected,
+            "queue_counts": merged.get("queue_counts"),
+        },
+        now=current_time,
+    )
+    merged["last_reconcile_at"] = runtime_isoformat(current_time)
+    merged["last_reconcile_event_id"] = reconcile_event["id"]
+    merged["drift_detected"] = drift_detected
+    if drift_detected:
+        drift_event = emit_meridian_event(
+            "meridian_drift_detected",
+            {
+                "workspace": snapshot["workspace"],
+                "previous_snapshot_version": previous_version,
+                "snapshot_version": merged["snapshot_version"],
+            },
+            now=current_time,
+        )
+        merged["last_drift_event_id"] = drift_event["id"]
+    stale_signatures: dict[str, str] = {}
+    previous_stale_signatures = previous_state.get("stale_event_signatures") or {}
+    if not isinstance(previous_stale_signatures, dict):
+        previous_stale_signatures = {}
+    for stale_entry in merged.get("stale_tasks", []):
+        signature = json.dumps(
+            {
+                "queue": stale_entry.get("queue"),
+                "reason": stale_entry.get("reason"),
+                "updated_at": stale_entry.get("updated_at"),
+                "stale_since": stale_entry.get("stale_since"),
+            },
+            sort_keys=True,
+        )
+        task_id = stale_entry.get("task_id")
+        if task_id:
+            stale_signatures[task_id] = signature
+            if previous_stale_signatures.get(task_id) == signature:
+                continue
+        emit_meridian_event(
+            "stale_task_detected",
+            {
+                "workspace": snapshot["workspace"],
+                **stale_entry,
+            },
+            now=current_time,
+        )
+    merged["stale_event_signatures"] = stale_signatures
+    atomic_json_write(STATE_PATH, merged)
     return merged
 
 
@@ -279,6 +689,89 @@ def _print_status(snapshot: dict[str, Any]) -> None:
     print(f"  Last transition:{' ' if snapshot.get('last_transition_time') else ''}{snapshot.get('last_transition_time', '-')}")
     if snapshot.get("current_branch"):
         print(f"  Current branch: {snapshot['current_branch']}")
+    if snapshot.get("stale_tasks"):
+        print(f"  Stale tasks:    {len(snapshot['stale_tasks'])}")
+    if snapshot.get("planned_actions"):
+        first = snapshot["planned_actions"][0]
+        print(
+            "  Next action:    "
+            f"{first.get('kind')} -> {first.get('actor')}"
+            f" ({first.get('task_id') or first.get('queue') or '-'})"
+        )
+        if first.get("reason"):
+            print(f"  Why now:        {first['reason']}")
+    worker_leases = snapshot.get("worker_leases") or []
+    if worker_leases:
+        print(f"  Active leases:  {len(worker_leases)}")
+    if snapshot.get("drift_detected"):
+        print("  Drift detected: yes")
+
+
+def _print_stale(snapshot: dict[str, Any]) -> None:
+    print("Meridian stale tasks")
+    stale_tasks = snapshot.get("stale_tasks") or []
+    if not stale_tasks:
+        print("  None")
+        return
+    for entry in stale_tasks:
+        print(
+            "  "
+            f"{entry.get('task_id') or '-'} "
+            f"[{entry.get('queue') or '-'}] "
+            f"reason={entry.get('reason') or '-'} "
+            f"stale_since={entry.get('stale_since') or '-'}"
+        )
+
+
+def _print_leases(snapshot: dict[str, Any]) -> None:
+    print("Meridian leases")
+    orchestrator = snapshot.get("orchestrator_lease")
+    if orchestrator:
+        print(
+            "  Orchestrator:   "
+            f"run_id={orchestrator.get('run_id') or '-'} "
+            f"status={orchestrator.get('status') or '-'} "
+            f"expires_at={orchestrator.get('expires_at') or '-'}"
+        )
+    else:
+        print("  Orchestrator:   none")
+
+    worker_leases = snapshot.get("worker_leases") or []
+    if not worker_leases:
+        print("  Worker leases:  none")
+        return
+    print(f"  Worker leases:  {len(worker_leases)}")
+    for lease in worker_leases:
+        print(
+            "    "
+            f"{lease.get('actor') or '-'} "
+            f"task={lease.get('task_id') or '-'} "
+            f"kind={lease.get('kind') or '-'} "
+            f"expires_at={lease.get('expires_at') or '-'}"
+        )
+
+
+def _print_task_history(workspace: str | Path, task_id: str) -> None:
+    print("Meridian task history")
+    document = locate_task(workspace, task_id)
+    print(f"  Task:           {document.task_id}")
+    print(f"  Queue:          {document.queue}")
+    print(f"  Status:         {document.metadata.get('status') or document.queue}")
+    history = document.metadata.get("workflow_history") or []
+    if not history:
+        print("  History:        none")
+        return
+    print(f"  History:        {len(history)} event(s)")
+    for entry in history:
+        print(
+            "    "
+            f"{entry.get('at') or '-'} "
+            f"{entry.get('event') or '-'} "
+            f"actor={entry.get('actor') or '-'} "
+            f"from={entry.get('from_queue') or entry.get('queue') or '-'} "
+            f"to={entry.get('to_queue') or '-'} "
+            f"reason={entry.get('reason') or '-'}"
+        )
 
 
 def meridian_command(args) -> int:
@@ -290,14 +783,51 @@ def meridian_command(args) -> int:
         snapshot = dispatch_meridian(workspace)
         _print_status(snapshot)
         if snapshot["should_dispatch"]:
+            actions = snapshot.get("last_dispatch_results", {}).get("dispatched_actions", [])
+            first = actions[0] if actions else {}
             print(
-                f"\nDispatch suggestion: wake {snapshot['active_persona']} "
-                f"for {snapshot.get('active_task_id') or snapshot.get('active_task_filename') or 'the next task'}."
+                f"\nDispatch executed: wake {first.get('actor') or snapshot['active_persona']} "
+                f"for {first.get('task_id') or snapshot.get('active_task_id') or snapshot.get('active_task_filename') or 'the next task'}."
             )
+            if len(actions) > 1:
+                print(f"Additional wakeups scheduled: {len(actions) - 1}")
         elif snapshot["workflow_state"] == "waiting_human":
             print("\nDispatch suggestion: hold. Waiting for human confirmation.")
+        elif snapshot.get("dispatch_blocked_reason") == "orchestrator_lease_active":
+            print("\nDispatch suggestion: hold. Another Meridian orchestration pass still owns the lease.")
         else:
             print("\nDispatch suggestion: no new wake-up needed.")
+        return 0
+
+    if subcommand == "reconcile":
+        snapshot = reconcile_meridian(workspace)
+        _print_status(snapshot)
+        if snapshot.get("drift_detected"):
+            print("\nReconcile result: drift detected and derived state rebuilt from canonical task files.")
+        else:
+            print("\nReconcile result: derived state is aligned with canonical task files.")
+        return 0
+
+    if subcommand == "stale":
+        snapshot = persist_meridian_snapshot(
+            collect_meridian_snapshot(workspace),
+        )
+        _print_stale(snapshot)
+        return 0
+
+    if subcommand == "leases":
+        snapshot = persist_meridian_snapshot(
+            collect_meridian_snapshot(workspace),
+        )
+        _print_leases(snapshot)
+        return 0
+
+    if subcommand == "history":
+        task_id = getattr(args, "task_id", None)
+        if not task_id:
+            print("Error: meridian history requires a task id.")
+            return 1
+        _print_task_history(workspace, task_id)
         return 0
 
     snapshot = persist_meridian_snapshot(

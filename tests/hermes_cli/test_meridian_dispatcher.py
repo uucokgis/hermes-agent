@@ -1,20 +1,44 @@
 from argparse import Namespace
+from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 
+import yaml
+import pytest
 
-def _write_task(path: Path, task_id: str, *, branch: str | None = None) -> None:
-    lines = [f"id: {task_id}", f"title: {task_id}"]
+def _write_task(
+    path: Path,
+    task_id: str,
+    *,
+    branch: str | None = None,
+    metadata: dict | None = None,
+) -> None:
+    payload = {
+        "id": task_id,
+        "title": task_id,
+        **(metadata or {}),
+    }
     if branch:
-        lines.append(f"pr_branch: {branch}")
+        payload["pr_branch"] = branch
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path.write_text(
+        "---\n" + yaml.safe_dump(payload, sort_keys=False).strip() + "\n---\n",
+        encoding="utf-8",
+    )
 
 
 def _make_workspace(tmp_path: Path) -> Path:
     workspace = tmp_path / "workspace"
-    for queue in ("backlog", "ready", "in_progress", "review", "done", "debt"):
+    for queue in ("backlog", "ready", "in_progress", "review", "waiting_human", "done", "debt"):
         (workspace / "tasks" / queue).mkdir(parents=True, exist_ok=True)
     return workspace
+
+
+@pytest.fixture(autouse=True)
+def _isolated_meridian_events(tmp_path, monkeypatch):
+    from hermes_cli import meridian_runtime as mr
+
+    monkeypatch.setattr(mr, "EVENT_LOG_PATH", tmp_path / ".hermes" / "meridian" / "events.jsonl")
 
 
 def test_collect_snapshot_prefers_review_over_ready_and_exposes_branch(tmp_path, monkeypatch):
@@ -40,6 +64,8 @@ def test_collect_snapshot_prefers_review_over_ready_and_exposes_branch(tmp_path,
     assert snapshot["current_branch"] == "task/review-loop"
     assert snapshot["queue_counts"]["ready"] == 1
     assert snapshot["queue_counts"]["review"] == 1
+    assert snapshot["planned_actions"][0]["task_id"] == "TASK-2"
+    assert snapshot["planned_actions"][0]["actor"] == "matthew"
 
 
 def test_collect_snapshot_keeps_review_loop_locked_to_in_progress_task(tmp_path, monkeypatch):
@@ -63,7 +89,7 @@ def test_collect_snapshot_keeps_review_loop_locked_to_in_progress_task(tmp_path,
     assert snapshot["waiting_on"] == "fatih"
 
 
-def test_collect_snapshot_waiting_human_overrides_auto_dispatch(tmp_path, monkeypatch):
+def test_collect_snapshot_stale_waiting_human_state_does_not_override_canonical_queues(tmp_path, monkeypatch):
     from hermes_cli import meridian_dispatcher as md
 
     workspace = _make_workspace(tmp_path)
@@ -77,10 +103,48 @@ def test_collect_snapshot_waiting_human_overrides_auto_dispatch(tmp_path, monkey
         state={"waiting_human": True, "review_loop_task_id": "TASK-9"},
     )
 
+    assert snapshot["active_persona"] == "matthew"
+    assert snapshot["workflow_state"] == "review"
+    assert snapshot["waiting_on"] == "matthew"
+    assert snapshot["active_task_id"] == "TASK-9"
+
+
+def test_collect_snapshot_reads_waiting_human_from_canonical_queue(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+
+    _write_task(workspace / "tasks" / "waiting_human" / "hold-task.md", "TASK-H")
+
+    snapshot = md.collect_meridian_snapshot(workspace)
+
     assert snapshot["active_persona"] == "idle"
     assert snapshot["workflow_state"] == "waiting_human"
     assert snapshot["waiting_on"] == "human_confirmation"
-    assert snapshot["active_task_id"] == "TASK-9"
+    assert snapshot["active_task_id"] == "TASK-H"
+    assert snapshot["planned_actions"][0]["kind"] == "hold_waiting_human"
+
+
+def test_collect_snapshot_does_not_wedge_waiting_human_from_stale_derived_state(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+
+    _write_task(workspace / "tasks" / "ready" / "ready-task.md", "TASK-1")
+
+    snapshot = md.collect_meridian_snapshot(
+        workspace,
+        state={"waiting_human": True, "waiting_on": "human_confirmation", "review_loop_task_id": "TASK-OLD"},
+    )
+
+    assert snapshot["waiting_human"] is False
+    assert snapshot["workflow_state"] == "ready"
+    assert snapshot["waiting_on"] == "fatih"
+    assert snapshot["active_task_id"] == "TASK-1"
 
 
 def test_dispatch_only_suggests_new_wakeups_once_per_transition(tmp_path, monkeypatch):
@@ -99,6 +163,279 @@ def test_dispatch_only_suggests_new_wakeups_once_per_transition(tmp_path, monkey
     assert second["should_dispatch"] is False
     assert second["last_dispatched_persona"] == "fatih"
     assert second["last_dispatched_task_id"] == "TASK-1"
+    assert second["last_dispatch_results"]["suppressed_actions"][0]["reason"] == "worker_lease_active"
+
+
+def test_dispatch_creates_worker_lease_and_idempotency_key(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+    from hermes_cli import meridian_runtime as mr
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+    monkeypatch.setattr(mr, "EVENT_LOG_PATH", tmp_path / ".hermes" / "meridian" / "events.jsonl")
+
+    _write_task(workspace / "tasks" / "ready" / "ready-task.md", "TASK-1")
+
+    result = md.dispatch_meridian(workspace)
+
+    assert result["should_dispatch"] is True
+    dispatched = result["last_dispatch_results"]["dispatched_actions"][0]
+    lease = result["worker_leases"][0]
+    assert dispatched["actor"] == "fatih"
+    assert dispatched["task_id"] == "TASK-1"
+    assert dispatched["idempotency_key"]
+    assert lease["action_identity"] == "fatih:TASK-1:start_ready_task"
+    assert lease["idempotency_key"] == dispatched["idempotency_key"]
+    assert "meridian_dispatch_completed" in mr.EVENT_LOG_PATH.read_text(encoding="utf-8")
+
+
+def test_dispatch_allows_retry_after_worker_lease_expiry(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+
+    _write_task(workspace / "tasks" / "ready" / "ready-task.md", "TASK-1")
+
+    first_time = datetime(2026, 4, 5, 12, 0, tzinfo=timezone.utc)
+    second_time = first_time + timedelta(minutes=31)
+
+    first = md.dispatch_meridian(workspace, now=first_time)
+    second = md.dispatch_meridian(workspace, now=second_time)
+
+    assert first["should_dispatch"] is True
+    assert second["should_dispatch"] is True
+    assert second["last_dispatch_results"]["dispatched_actions"][0]["idempotency_key"] == first["last_dispatch_results"]["dispatched_actions"][0]["idempotency_key"]
+    assert second["worker_leases"][0]["acquired_at"] == second_time.isoformat()
+
+
+def test_dispatch_respects_active_orchestrator_lease(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+
+    _write_task(workspace / "tasks" / "ready" / "ready-task.md", "TASK-1")
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "orchestrator_lease": {
+                    "run_id": "existing-run",
+                    "workspace": str(workspace),
+                    "acquired_at": "2026-04-05T12:00:00+00:00",
+                    "expires_at": "2026-04-05T12:02:00+00:00",
+                    "status": "active",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = md.dispatch_meridian(
+        workspace,
+        now=datetime(2026, 4, 5, 12, 1, tzinfo=timezone.utc),
+    )
+
+    assert result["should_dispatch"] is False
+    assert result["dispatch_blocked_reason"] == "orchestrator_lease_active"
+    assert result["orchestrator_lease"]["run_id"] == "existing-run"
+
+
+def test_reconcile_detects_drift_and_emits_event(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+    from hermes_cli import meridian_runtime as mr
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    event_path = tmp_path / ".hermes" / "meridian" / "events.jsonl"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+    monkeypatch.setattr(mr, "EVENT_LOG_PATH", event_path)
+
+    _write_task(workspace / "tasks" / "backlog" / "task-1.md", "TASK-1")
+    initial = md.reconcile_meridian(workspace, now=datetime(2026, 4, 5, 12, 0, tzinfo=timezone.utc))
+    assert initial["drift_detected"] is False
+
+    _write_task(workspace / "tasks" / "ready" / "task-2.md", "TASK-2")
+    drifted = md.reconcile_meridian(workspace, now=datetime(2026, 4, 5, 12, 5, tzinfo=timezone.utc))
+
+    assert drifted["drift_detected"] is True
+    events = event_path.read_text(encoding="utf-8")
+    assert "meridian_reconciled" in events
+    assert "meridian_drift_detected" in events
+
+
+def test_reconcile_emits_stale_task_event(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+    from hermes_cli import meridian_runtime as mr
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    event_path = tmp_path / ".hermes" / "meridian" / "events.jsonl"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+    monkeypatch.setattr(mr, "EVENT_LOG_PATH", event_path)
+
+    stale_time = datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc).isoformat()
+    _write_task(
+        workspace / "tasks" / "review" / "stale-task.md",
+        "TASK-STALE",
+        metadata={"updated_at": stale_time},
+    )
+
+    md.reconcile_meridian(workspace, now=datetime(2026, 4, 5, 12, 0, tzinfo=timezone.utc))
+
+    events = event_path.read_text(encoding="utf-8")
+    assert "stale_task_detected" in events
+
+
+def test_reconcile_deduplicates_unchanged_stale_task_events(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+    from hermes_cli import meridian_runtime as mr
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    event_path = tmp_path / ".hermes" / "meridian" / "events.jsonl"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+    monkeypatch.setattr(mr, "EVENT_LOG_PATH", event_path)
+
+    stale_time = datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc).isoformat()
+    _write_task(
+        workspace / "tasks" / "review" / "stale-task.md",
+        "TASK-STALE",
+        metadata={"updated_at": stale_time},
+    )
+
+    md.reconcile_meridian(workspace, now=datetime(2026, 4, 5, 12, 0, tzinfo=timezone.utc))
+    first_events = event_path.read_text(encoding="utf-8").splitlines()
+    first_stale_count = sum("stale_task_detected" in line for line in first_events)
+
+    md.reconcile_meridian(workspace, now=datetime(2026, 4, 5, 12, 5, tzinfo=timezone.utc))
+    second_events = event_path.read_text(encoding="utf-8").splitlines()
+    second_stale_count = sum("stale_task_detected" in line for line in second_events)
+
+    assert first_stale_count == 1
+    assert second_stale_count == 1
+
+
+def test_meridian_command_reconcile_prints_recovery_status(tmp_path, monkeypatch, capsys):
+    from hermes_cli import meridian_dispatcher as md
+    from hermes_cli import meridian_runtime as mr
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+    monkeypatch.setattr(mr, "EVENT_LOG_PATH", tmp_path / ".hermes" / "meridian" / "events.jsonl")
+    _write_task(workspace / "tasks" / "backlog" / "task-1.md", "TASK-1")
+
+    rc = md.meridian_command(Namespace(meridian_command="reconcile", workspace=str(workspace)))
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Reconcile result:" in out
+
+
+def test_planner_replenishes_ready_while_delivery_is_active(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+
+    _write_task(workspace / "tasks" / "in_progress" / "loop.md", "TASK-LOOP")
+    _write_task(
+        workspace / "tasks" / "backlog" / "promotable.md",
+        "TASK-PROMOTE",
+        metadata={"acceptance_criteria": ["done means done"], "priority": "high"},
+    )
+
+    snapshot = md.collect_meridian_snapshot(workspace)
+
+    assert snapshot["active_persona"] == "fatih"
+    assert snapshot["planned_actions"][0]["actor"] == "fatih"
+    replenish = next(action for action in snapshot["planned_actions"] if action["kind"] == "replenish_ready")
+    assert replenish["actor"] == "philip"
+    assert replenish["task_ids"] == ["TASK-PROMOTE"]
+
+
+def test_planner_uses_priority_then_oldest_task_for_ready_replenishment(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+
+    older = datetime(2026, 4, 1, 8, 0, tzinfo=timezone.utc).isoformat()
+    newer = datetime(2026, 4, 2, 8, 0, tzinfo=timezone.utc).isoformat()
+
+    _write_task(
+        workspace / "tasks" / "backlog" / "medium-older.md",
+        "TASK-OLD",
+        metadata={"acceptance_criteria": ["ship it"], "priority": "medium", "created_at": older},
+    )
+    _write_task(
+        workspace / "tasks" / "backlog" / "high-newer.md",
+        "TASK-HIGH",
+        metadata={"acceptance_criteria": ["ship it"], "priority": "high", "created_at": newer},
+    )
+
+    snapshot = md.collect_meridian_snapshot(workspace)
+    replenish = next(action for action in snapshot["planned_actions"] if action["kind"] == "replenish_ready")
+
+    assert replenish["task_ids"][0] == "TASK-HIGH"
+
+    (workspace / "tasks" / "backlog" / "high-newer.md").unlink()
+
+    snapshot = md.collect_meridian_snapshot(workspace)
+    replenish = next(action for action in snapshot["planned_actions"] if action["kind"] == "replenish_ready")
+    assert replenish["task_ids"][0] == "TASK-OLD"
+
+
+def test_planner_surfaces_stale_review_as_first_class_action(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+
+    stale_time = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    _write_task(
+        workspace / "tasks" / "review" / "stale-review.md",
+        "TASK-STALE",
+        metadata={"updated_at": stale_time},
+    )
+
+    snapshot = md.collect_meridian_snapshot(workspace)
+
+    assert snapshot["stale_tasks"][0]["task_id"] == "TASK-STALE"
+    assert snapshot["stale_tasks"][0]["queue"] == "review"
+    assert snapshot["planned_actions"][0]["kind"] == "triage_stale_review"
+    assert snapshot["planned_actions"][0]["actor"] == "matthew"
+
+
+def test_planner_respects_dependency_readiness_for_replenishment(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+
+    _write_task(
+        workspace / "tasks" / "backlog" / "blocked.md",
+        "TASK-BLOCKED",
+        metadata={"acceptance_criteria": ["ship it"], "depends_on": ["TASK-DEP"]},
+    )
+    _write_task(
+        workspace / "tasks" / "backlog" / "ready.md",
+        "TASK-READY",
+        metadata={"acceptance_criteria": ["ship it"]},
+    )
+
+    snapshot = md.collect_meridian_snapshot(workspace)
+    replenish = next(action for action in snapshot["planned_actions"] if action["kind"] == "replenish_ready")
+    assert replenish["task_ids"] == ["TASK-READY"]
 
 
 def test_meridian_command_status_prints_expected_fields(tmp_path, monkeypatch, capsys):
@@ -119,6 +456,73 @@ def test_meridian_command_status_prints_expected_fields(tmp_path, monkeypatch, c
     assert "Workflow state: backlog" in out
     assert "Waiting on:     philip" in out
     assert "backlog=1" in out
+    assert "Next action:" in out
+    assert "Why now:" in out
+
+
+def test_meridian_command_stale_prints_stale_tasks(tmp_path, monkeypatch, capsys):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+
+    stale_time = datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc).isoformat()
+    _write_task(
+        workspace / "tasks" / "review" / "stale-task.md",
+        "TASK-STALE",
+        metadata={"updated_at": stale_time},
+    )
+
+    rc = md.meridian_command(Namespace(meridian_command="stale", workspace=str(workspace)))
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Meridian stale tasks" in out
+    assert "TASK-STALE" in out
+    assert "review_sla_exceeded" in out
+
+
+def test_meridian_command_leases_prints_worker_leases(tmp_path, monkeypatch, capsys):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+    _write_task(workspace / "tasks" / "ready" / "ready-task.md", "TASK-1")
+
+    md.dispatch_meridian(workspace, now=datetime(2026, 4, 5, 12, 0, tzinfo=timezone.utc))
+    rc = md.meridian_command(Namespace(meridian_command="leases", workspace=str(workspace)))
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Meridian leases" in out
+    assert "Worker leases:" in out
+    assert "TASK-1" in out
+
+
+def test_meridian_command_history_prints_workflow_history(tmp_path, monkeypatch, capsys):
+    from hermes_cli import meridian_dispatcher as md
+    from hermes_cli.meridian_workflow import claim_task, transition_task
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+    _write_task(workspace / "tasks" / "ready" / "ready-task.md", "TASK-1")
+
+    claim_task(workspace, task_id="TASK-1", actor="fatih")
+    transition_task(workspace, task_id="TASK-1", actor="fatih", from_queue="ready", to_queue="in_progress")
+
+    rc = md.meridian_command(
+        Namespace(meridian_command="history", workspace=str(workspace), task_id="TASK-1")
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Meridian task history" in out
+    assert "TASK-1" in out
+    assert "task_claimed" in out
+    assert "task_transitioned" in out
 
 
 def test_main_routes_meridian_status_subcommand(monkeypatch):
@@ -145,4 +549,60 @@ def test_main_routes_meridian_status_subcommand(monkeypatch):
         "command": "meridian",
         "subcommand": "status",
         "workspace": "/tmp/meridian-workspace",
+    }
+
+
+def test_main_routes_meridian_reconcile_subcommand(monkeypatch):
+    import sys
+    import hermes_cli.main as main_mod
+
+    captured = {}
+
+    def fake_cmd_meridian(args):
+        captured["command"] = args.command
+        captured["subcommand"] = args.meridian_command
+        captured["workspace"] = args.workspace
+
+    monkeypatch.setattr(main_mod, "cmd_meridian", fake_cmd_meridian)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["hermes", "meridian", "reconcile", "--workspace", "/tmp/meridian-workspace"],
+    )
+
+    main_mod.main()
+
+    assert captured == {
+        "command": "meridian",
+        "subcommand": "reconcile",
+        "workspace": "/tmp/meridian-workspace",
+    }
+
+
+def test_main_routes_meridian_history_subcommand(monkeypatch):
+    import sys
+    import hermes_cli.main as main_mod
+
+    captured = {}
+
+    def fake_cmd_meridian(args):
+        captured["command"] = args.command
+        captured["subcommand"] = args.meridian_command
+        captured["workspace"] = args.workspace
+        captured["task_id"] = args.task_id
+
+    monkeypatch.setattr(main_mod, "cmd_meridian", fake_cmd_meridian)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["hermes", "meridian", "history", "TASK-42", "--workspace", "/tmp/meridian-workspace"],
+    )
+
+    main_mod.main()
+
+    assert captured == {
+        "command": "meridian",
+        "subcommand": "history",
+        "workspace": "/tmp/meridian-workspace",
+        "task_id": "TASK-42",
     }

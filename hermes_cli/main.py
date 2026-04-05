@@ -4464,6 +4464,47 @@ For more help on a command:
         help="Workspace root containing the tasks/ directory (default: current directory)",
     )
 
+    meridian_reconcile = meridian_subparsers.add_parser(
+        "reconcile",
+        help="Rebuild derived Meridian state from canonical task files",
+    )
+    meridian_reconcile.add_argument(
+        "--workspace",
+        default=".",
+        help="Workspace root containing the tasks/ directory (default: current directory)",
+    )
+
+    meridian_stale = meridian_subparsers.add_parser(
+        "stale",
+        help="Show Meridian stale task inspection",
+    )
+    meridian_stale.add_argument(
+        "--workspace",
+        default=".",
+        help="Workspace root containing the tasks/ directory (default: current directory)",
+    )
+
+    meridian_leases = meridian_subparsers.add_parser(
+        "leases",
+        help="Show active Meridian orchestration and worker leases",
+    )
+    meridian_leases.add_argument(
+        "--workspace",
+        default=".",
+        help="Workspace root containing the tasks/ directory (default: current directory)",
+    )
+
+    meridian_history = meridian_subparsers.add_parser(
+        "history",
+        help="Show workflow history for a Meridian task",
+    )
+    meridian_history.add_argument("task_id", help="Task id or filename")
+    meridian_history.add_argument(
+        "--workspace",
+        default=".",
+        help="Workspace root containing the tasks/ directory (default: current directory)",
+    )
+
     meridian_parser.set_defaults(func=cmd_meridian)
 
     # =========================================================================

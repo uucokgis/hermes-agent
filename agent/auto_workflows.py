@@ -20,16 +20,28 @@ def should_auto_route_meridian_message(user_message: str, *, delegate_depth: int
         return False
     if text.startswith("/"):
         return False
-    if "meridian" not in text:
-        return False
 
     # Direct intent markers for work requests in English/Turkish.
     work_markers = (
         "yap", "yapal", "hallet", "bak", "feature", "bug", "task", "review", "fix",
         "implement", "incele", "geliştir", "gelistir", "refactor",
-        "philip", "fatih", "matthew",
     )
-    return any(marker in text for marker in work_markers)
+    persona_markers = ("philip", "fatih", "matthew")
+    queue_markers = ("backlog", "ready", "in_progress", "review", "done", "debt")
+
+    if "meridian" in text:
+        return any(marker in text for marker in (*work_markers, *persona_markers))
+
+    # Users often refer to the Meridian workflow by persona or queue name
+    # without saying "Meridian" explicitly. Require a stronger combination of
+    # workflow-specific language so ordinary "ready/review" phrasing does not
+    # accidentally trigger the overlay.
+    mentions_persona = any(marker in text for marker in persona_markers)
+    mentions_queue = any(marker in text for marker in queue_markers)
+    mentions_work = any(marker in text for marker in work_markers)
+    return (mentions_persona and (mentions_queue or mentions_work)) or (
+        "backlog" in text and mentions_work
+    )
 
 
 def build_meridian_workflow_overlay(
@@ -52,11 +64,13 @@ def build_meridian_workflow_overlay(
         "[SYSTEM: The user is asking Hermes to handle Meridian work directly. "
         "Follow the Meridian workflow skill below. Route new work through Philip "
         "first, use sequential handoff to Fatih and Matthew when task state makes "
-        "it appropriate, and avoid polling or cron for immediate work.]"
+        "it appropriate, use official Meridian workflow tools for claims and transitions, "
+        "and avoid polling or cron for immediate work.]"
     )
     runtime_note = (
         "This is a direct Meridian workflow request. Treat it as event-driven: "
-        "wake the next persona only when task state requires it."
+        "wake the next persona only when task state requires it, and prefer "
+        "task_claim/task_transition over raw queue file moves."
     )
     return _build_skill_message(
         loaded_skill,

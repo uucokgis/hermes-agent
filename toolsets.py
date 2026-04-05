@@ -203,6 +203,12 @@ TOOLSETS = {
         "includes": []
     },
 
+    "meridian": {
+        "description": "Deterministic Meridian workflow primitives for task claims and queue transitions",
+        "tools": ["task_claim", "task_transition"],
+        "includes": []
+    },
+
 
     # Scenario-specific toolsets
     
