@@ -9,6 +9,8 @@ such as the last transition timestamp and dispatch bookkeeping.
 from __future__ import annotations
 
 import json
+import os
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -54,6 +56,73 @@ PRIORITY_RANK = {
     "debt": 4,
 }
 STATE_PATH = get_hermes_home() / "meridian" / "workflow_state.json"
+AUTO_DISCOVERY_CANDIDATES = (
+    "meridian",
+    "Meridian",
+    "workspace/meridian",
+    "Projects/meridian",
+    "code/meridian",
+)
+
+
+def _resolve_workspace_path(workspace: str | Path | None = None) -> Path:
+    explicit = str(workspace).strip() if workspace is not None else ""
+    if explicit and explicit != ".":
+        return Path(explicit).expanduser().resolve()
+
+    env_workspace = (os.getenv("HERMES_MERIDIAN_WORKSPACE") or "").strip()
+    if env_workspace:
+        candidate = Path(env_workspace).expanduser().resolve()
+        if (candidate / "tasks").is_dir():
+            return candidate
+
+    state = _read_json(STATE_PATH)
+    state_workspace = str(state.get("workspace") or "").strip()
+    if state_workspace:
+        candidate = Path(state_workspace).expanduser().resolve()
+        if (candidate / "tasks").is_dir():
+            return candidate
+
+    cwd = Path.cwd().resolve()
+    if (cwd / "tasks").is_dir():
+        return cwd
+
+    home = Path.home()
+    for rel in AUTO_DISCOVERY_CANDIDATES:
+        candidate = (home / rel).resolve()
+        if (candidate / "tasks").is_dir():
+            return candidate
+
+    task_roots: list[Path] = []
+    try:
+        for child in home.iterdir():
+            if not child.is_dir():
+                continue
+            if (child / "tasks").is_dir():
+                task_roots.append(child.resolve())
+    except OSError:
+        pass
+
+    def _candidate_rank(path: Path) -> tuple[int, int, str]:
+        name = path.name.lower()
+        exact_meridian = 0 if name == "meridian" else 1
+        contains_meridian = 0 if "meridian" in str(path).lower() else 1
+        return (exact_meridian, contains_meridian, str(path))
+
+    if task_roots:
+        return sorted(task_roots, key=_candidate_rank)[0]
+
+    return cwd
+
+
+def _local_policy_window(now: datetime) -> str:
+    local_now = now.astimezone()
+    hour = local_now.hour
+    if 3 <= hour < 6:
+        return "night_patrol"
+    if 6 <= hour < 8:
+        return "philip_morning"
+    return "normal"
 
 
 def _utcnow_iso() -> str:
@@ -242,6 +311,7 @@ def _build_planned_actions(
     ready_target: int,
     review_loop_task_id: str | None,
     waiting_human: bool,
+    policy_window: str,
 ) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
     stale_entries = _detect_stale_tasks(queues, now=now)
@@ -283,6 +353,7 @@ def _build_planned_actions(
         queues.get("in_progress", []),
         preferred_task_id=review_loop_task_id,
     )
+    fatih_can_start_new_work = policy_window not in {"night_patrol", "philip_morning"}
     if in_progress_task:
         stale = stale_by_task.get(in_progress_task.task_id)
         actions.append(
@@ -309,7 +380,7 @@ def _build_planned_actions(
                     "task_id": ready_task.task_id,
                     "queue": "ready",
                     "reason": "ready_queue_non_empty",
-                    "dispatchable": not waiting_human,
+                    "dispatchable": not waiting_human and fatih_can_start_new_work,
                 }
             )
 
@@ -379,6 +450,68 @@ def _build_planned_actions(
             }
         )
 
+    delivery_active = bool(
+        queues.get("review") or queues.get("in_progress") or queues.get("ready")
+    )
+    philip_already_planned = any(action.get("actor") == "philip" for action in actions)
+    if delivery_active and not philip_already_planned:
+        backlog_task = _select_task(queues.get("backlog", []))
+        if backlog_task:
+            actions.append(
+                {
+                    "kind": "background_backlog_scan",
+                    "actor": "philip",
+                    "task_id": backlog_task.task_id,
+                    "queue": "backlog",
+                    "reason": "delivery_active_keep_backlog_warm",
+                    "dispatchable": True,
+                }
+            )
+        elif queues.get("debt"):
+            debt_task = _select_task(queues["debt"])
+            actions.append(
+                {
+                    "kind": "background_debt_triage",
+                    "actor": "philip",
+                    "task_id": debt_task.task_id if debt_task else None,
+                    "queue": "debt",
+                    "reason": "delivery_active_keep_debt_visible",
+                    "dispatchable": True,
+                }
+            )
+
+    matthew_already_planned = any(action.get("actor") == "matthew" for action in actions)
+    if policy_window == "night_patrol" and not matthew_already_planned and not queues.get("in_progress"):
+        patrol_target = _select_task(queues.get("backlog", [])) or _select_task(queues.get("debt", []))
+        actions.append(
+            {
+                "kind": "night_architecture_patrol",
+                "actor": "matthew",
+                "task_id": patrol_target.task_id if patrol_target else None,
+                "queue": patrol_target.queue if patrol_target else "workspace",
+                "reason": "night_patrol_architecture_and_security_review",
+                "dispatchable": True,
+            }
+        )
+
+    philip_already_planned = any(action.get("actor") == "philip" for action in actions)
+    if policy_window in {"night_patrol", "philip_morning"} and not philip_already_planned:
+        planning_target = _select_task(queues.get("backlog", [])) or _select_task(queues.get("debt", []))
+        actions.append(
+            {
+                "kind": "night_backlog_planning" if policy_window == "night_patrol" else "morning_backlog_planning",
+                "actor": "philip",
+                "task_id": planning_target.task_id if planning_target else None,
+                "queue": planning_target.queue if planning_target else "workspace",
+                "reason": (
+                    "night_patrol_backlog_and_feature_shaping"
+                    if policy_window == "night_patrol"
+                    else "morning_backlog_planning_window"
+                ),
+                "dispatchable": True,
+            }
+        )
+
     return actions
 
 
@@ -411,9 +544,11 @@ def collect_meridian_snapshot(
 ) -> dict[str, Any]:
     """Collect a Meridian workflow snapshot from the task queues."""
     workspace_path = Path(workspace or ".").resolve()
+    workspace_path = _resolve_workspace_path(workspace)
     state = dict(state or _read_json(STATE_PATH))
     queues = _queue_map(workspace_path)
     current_time = now or runtime_utcnow()
+    policy_window = _local_policy_window(current_time)
     ready_target = int(state.get("ready_target") or READY_TARGET_DEFAULT)
     review_loop_task_id = _review_loop_task_id(queues, state)
     waiting_human_task = _pick_first(queues["waiting_human"])
@@ -426,6 +561,7 @@ def collect_meridian_snapshot(
         ready_target=ready_target,
         review_loop_task_id=review_loop_task_id,
         waiting_human=waiting_human,
+        policy_window=policy_window,
     )
 
     active_persona = "idle"
@@ -478,6 +614,7 @@ def collect_meridian_snapshot(
         "review_loop_task_id": review_loop_task_id,
         "current_branch": active_task.branch if active_task else None,
         "ready_target": ready_target,
+        "policy_window": policy_window,
         "planned_actions": planned_actions,
         "stale_tasks": stale_tasks,
     }
@@ -774,29 +911,110 @@ def _print_task_history(workspace: str | Path, task_id: str) -> None:
         )
 
 
+def _print_dispatch_summary(snapshot: dict[str, Any]) -> None:
+    if snapshot["should_dispatch"]:
+        actions = snapshot.get("last_dispatch_results", {}).get("dispatched_actions", [])
+        first = actions[0] if actions else {}
+        print(
+            "  Dispatch:       "
+            f"wake {first.get('actor') or snapshot['active_persona']} "
+            f"for {first.get('task_id') or snapshot.get('active_task_id') or snapshot.get('active_task_filename') or 'the next task'}"
+        )
+        if len(actions) > 1:
+            print(f"  More wakeups:    {len(actions) - 1}")
+    elif snapshot["workflow_state"] == "waiting_human":
+        print("  Dispatch:       hold (waiting for human confirmation)")
+    elif snapshot.get("dispatch_blocked_reason") == "orchestrator_lease_active":
+        print("  Dispatch:       hold (another orchestration pass owns the lease)")
+    else:
+        print("  Dispatch:       no new wake-up needed")
+
+
+def run_meridian_go_loop(
+    workspace: str | Path | None = None,
+    *,
+    sleep_seconds: float = 15.0,
+    idle_sleep_seconds: float = 60.0,
+    max_passes: int | None = None,
+    once: bool = False,
+) -> int:
+    """Run a long-lived Meridian orchestration loop with gentle backoff."""
+    workspace_path = _resolve_workspace_path(workspace)
+    passes = 0
+    last_snapshot_version: str | None = None
+    last_dispatch_signature: tuple[Any, ...] | None = None
+
+    print("Meridian go loop")
+    print(f"  Workspace:      {workspace_path}")
+    print(f"  Active sleep:   {sleep_seconds:.0f}s")
+    print(f"  Idle sleep:     {idle_sleep_seconds:.0f}s")
+    if once:
+        print("  Mode:           once")
+    elif max_passes is not None:
+        print(f"  Max passes:     {max_passes}")
+    else:
+        print("  Mode:           continuous")
+
+    try:
+        while True:
+            passes += 1
+            reconcile_meridian(workspace_path)
+            snapshot = dispatch_meridian(workspace_path)
+
+            snapshot_version = build_snapshot_version(snapshot)
+            dispatched_actions = snapshot.get("last_dispatch_results", {}).get("dispatched_actions", [])
+            dispatch_signature = tuple(
+                (item.get("actor"), item.get("task_id"), item.get("kind"), item.get("idempotency_key"))
+                for item in dispatched_actions
+            )
+            should_report = (
+                passes == 1
+                or snapshot["should_dispatch"]
+                or snapshot.get("dispatch_blocked_reason") == "orchestrator_lease_active"
+                or snapshot_version != last_snapshot_version
+                or dispatch_signature != last_dispatch_signature
+            )
+
+            if should_report:
+                print(f"\nPass {passes}")
+                _print_status(snapshot)
+                _print_dispatch_summary(snapshot)
+
+            if once:
+                return 0
+            if max_passes is not None and passes >= max_passes:
+                print("\nMeridian go loop reached max passes and is stopping.")
+                return 0
+
+            delivery_active = snapshot["workflow_state"] in {"review", "in_progress", "ready", "backlog"}
+            sleep_for = sleep_seconds if delivery_active else idle_sleep_seconds
+            last_snapshot_version = snapshot_version
+            last_dispatch_signature = dispatch_signature
+            time.sleep(max(0.0, sleep_for))
+    except KeyboardInterrupt:
+        print("\nMeridian go loop stopped.")
+        return 0
+
+
 def meridian_command(args) -> int:
     """Entry point for ``hermes meridian`` commands."""
-    workspace = getattr(args, "workspace", None) or "."
+    workspace = getattr(args, "workspace", None)
     subcommand = getattr(args, "meridian_command", None) or "status"
+
+    if subcommand == "go":
+        return run_meridian_go_loop(
+            workspace,
+            sleep_seconds=float(getattr(args, "sleep", 15.0)),
+            idle_sleep_seconds=float(getattr(args, "idle_sleep", 60.0)),
+            max_passes=getattr(args, "max_passes", None),
+            once=bool(getattr(args, "once", False)),
+        )
 
     if subcommand == "dispatch":
         snapshot = dispatch_meridian(workspace)
         _print_status(snapshot)
-        if snapshot["should_dispatch"]:
-            actions = snapshot.get("last_dispatch_results", {}).get("dispatched_actions", [])
-            first = actions[0] if actions else {}
-            print(
-                f"\nDispatch executed: wake {first.get('actor') or snapshot['active_persona']} "
-                f"for {first.get('task_id') or snapshot.get('active_task_id') or snapshot.get('active_task_filename') or 'the next task'}."
-            )
-            if len(actions) > 1:
-                print(f"Additional wakeups scheduled: {len(actions) - 1}")
-        elif snapshot["workflow_state"] == "waiting_human":
-            print("\nDispatch suggestion: hold. Waiting for human confirmation.")
-        elif snapshot.get("dispatch_blocked_reason") == "orchestrator_lease_active":
-            print("\nDispatch suggestion: hold. Another Meridian orchestration pass still owns the lease.")
-        else:
-            print("\nDispatch suggestion: no new wake-up needed.")
+        print()
+        _print_dispatch_summary(snapshot)
         return 0
 
     if subcommand == "reconcile":

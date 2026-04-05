@@ -29,6 +29,7 @@ Do not create hourly loops for immediate work.
 ## Core Rules
 
 - New user work enters through **Philip first** by default.
+- Treat Philip as the default human-facing Meridian persona.
 - Use **sequential handoff**, not parallel delegation.
 - Only wake the next persona when the task state requires it.
 - Prefer the existing Meridian task system over ad-hoc status tracking.
@@ -64,6 +65,7 @@ Wake Fatih only when:
 
 Fatih should not start unrelated work while a review/request-changes loop is active.
 Fatih should claim work explicitly before `ready -> in_progress`.
+Fatih should create meaningful task-related commits before handing work to review.
 
 ### 3. Review
 
@@ -95,8 +97,10 @@ Use the dispatcher/reconcile outputs as the orchestration source of truth for de
 Night patrol is separate from the immediate work pipeline.
 
 - Do **not** start night patrol during a direct user-request workflow unless the user explicitly asks for it.
-- If Fatih still has active work, Philip and Matthew should generally skip patrol work.
+- If Fatih still has active work, let him finish it but avoid assigning him unrelated new work.
 - If Fatih is idle, Philip and Matthew may do read-heavy scans and report findings.
+- Matthew should use patrol time for architecture/security/codebase review and produce concrete follow-up work instead of silent reshaping.
+- Philip should use patrol time for backlog shaping, feature framing, and implementation read-through.
 
 ## Efficiency Rules
 

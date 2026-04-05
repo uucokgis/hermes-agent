@@ -68,6 +68,29 @@ def test_collect_snapshot_prefers_review_over_ready_and_exposes_branch(tmp_path,
     assert snapshot["planned_actions"][0]["actor"] == "matthew"
 
 
+def test_collect_snapshot_auto_discovers_meridian_workspace_from_home(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+
+    home = tmp_path / "home"
+    workspace = home / "meridian"
+    for queue in ("backlog", "ready", "in_progress", "review", "waiting_human", "done", "debt"):
+        (workspace / "tasks" / queue).mkdir(parents=True, exist_ok=True)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+    monkeypatch.setattr(md.Path, "home", lambda: home)
+    other_cwd = tmp_path / "cwd"
+    other_cwd.mkdir()
+    monkeypatch.chdir(other_cwd)
+
+    _write_task(workspace / "tasks" / "backlog" / "backlog-task.md", "TASK-B")
+
+    snapshot = md.collect_meridian_snapshot(None)
+
+    assert snapshot["workspace"] == str(workspace.resolve())
+    assert snapshot["active_persona"] == "philip"
+    assert snapshot["active_task_id"] == "TASK-B"
+
+
 def test_collect_snapshot_keeps_review_loop_locked_to_in_progress_task(tmp_path, monkeypatch):
     from hermes_cli import meridian_dispatcher as md
 
@@ -360,6 +383,65 @@ def test_planner_replenishes_ready_while_delivery_is_active(tmp_path, monkeypatc
     assert replenish["task_ids"] == ["TASK-PROMOTE"]
 
 
+def test_planner_keeps_philip_scanning_backlog_during_active_delivery(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+
+    _write_task(workspace / "tasks" / "review" / "review.md", "TASK-REVIEW")
+    _write_task(workspace / "tasks" / "backlog" / "future.md", "TASK-BG")
+
+    snapshot = md.collect_meridian_snapshot(workspace)
+
+    assert snapshot["planned_actions"][0]["actor"] == "matthew"
+    philip_action = next(action for action in snapshot["planned_actions"] if action["actor"] == "philip")
+    assert philip_action["kind"] == "background_backlog_scan"
+    assert philip_action["task_id"] == "TASK-BG"
+
+
+def test_night_patrol_keeps_fatih_from_starting_new_ready_work(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+    monkeypatch.setattr(md, "_local_policy_window", lambda now: "night_patrol")
+
+    _write_task(workspace / "tasks" / "ready" / "ready.md", "TASK-READY")
+    _write_task(workspace / "tasks" / "backlog" / "future.md", "TASK-BG")
+
+    snapshot = md.collect_meridian_snapshot(workspace)
+    start_ready = next(action for action in snapshot["planned_actions"] if action["kind"] == "start_ready_task")
+    matthew_patrol = next(action for action in snapshot["planned_actions"] if action["actor"] == "matthew")
+
+    assert start_ready["dispatchable"] is False
+    assert matthew_patrol["kind"] == "night_architecture_patrol"
+
+    dispatched = md.dispatch_meridian(workspace)["last_dispatch_results"]["dispatched_actions"]
+    actors = {action["actor"] for action in dispatched}
+    assert "fatih" not in actors
+    assert "matthew" in actors
+
+
+def test_morning_window_keeps_only_philip_background_planning(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+    monkeypatch.setattr(md, "_local_policy_window", lambda now: "philip_morning")
+
+    _write_task(workspace / "tasks" / "backlog" / "future.md", "TASK-BG")
+
+    snapshot = md.collect_meridian_snapshot(workspace)
+
+    assert snapshot["planned_actions"][0]["actor"] == "philip"
+    assert snapshot["planned_actions"][0]["kind"] == "groom_backlog"
+    assert all(action["actor"] != "matthew" for action in snapshot["planned_actions"])
+
+
 def test_planner_uses_priority_then_oldest_task_for_ready_replenishment(tmp_path, monkeypatch):
     from hermes_cli import meridian_dispatcher as md
 
@@ -501,6 +583,32 @@ def test_meridian_command_leases_prints_worker_leases(tmp_path, monkeypatch, cap
     assert "TASK-1" in out
 
 
+def test_meridian_command_go_once_runs_single_pass(tmp_path, monkeypatch, capsys):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+    _write_task(workspace / "tasks" / "ready" / "ready-task.md", "TASK-1")
+
+    rc = md.meridian_command(
+        Namespace(
+            meridian_command="go",
+            workspace=str(workspace),
+            sleep=0.0,
+            idle_sleep=0.0,
+            max_passes=None,
+            once=True,
+        )
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Meridian go loop" in out
+    assert "Pass 1" in out
+    assert "wake fatih for TASK-1" in out
+
+
 def test_meridian_command_history_prints_workflow_history(tmp_path, monkeypatch, capsys):
     from hermes_cli import meridian_dispatcher as md
     from hermes_cli.meridian_workflow import claim_task, transition_task
@@ -576,6 +684,54 @@ def test_main_routes_meridian_reconcile_subcommand(monkeypatch):
         "command": "meridian",
         "subcommand": "reconcile",
         "workspace": "/tmp/meridian-workspace",
+    }
+
+
+def test_main_routes_meridian_go_subcommand(monkeypatch):
+    import sys
+    import hermes_cli.main as main_mod
+
+    captured = {}
+
+    def fake_cmd_meridian(args):
+        captured["command"] = args.command
+        captured["subcommand"] = args.meridian_command
+        captured["workspace"] = args.workspace
+        captured["sleep"] = args.sleep
+        captured["idle_sleep"] = args.idle_sleep
+        captured["max_passes"] = args.max_passes
+        captured["once"] = args.once
+
+    monkeypatch.setattr(main_mod, "cmd_meridian", fake_cmd_meridian)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "hermes",
+            "meridian",
+            "go",
+            "--workspace",
+            "/tmp/meridian-workspace",
+            "--sleep",
+            "5",
+            "--idle-sleep",
+            "20",
+            "--max-passes",
+            "3",
+            "--once",
+        ],
+    )
+
+    main_mod.main()
+
+    assert captured == {
+        "command": "meridian",
+        "subcommand": "go",
+        "workspace": "/tmp/meridian-workspace",
+        "sleep": 5.0,
+        "idle_sleep": 20.0,
+        "max_passes": 3,
+        "once": True,
     }
 
 

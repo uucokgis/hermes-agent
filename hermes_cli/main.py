@@ -4439,8 +4439,8 @@ For more help on a command:
     )
     meridian_parser.add_argument(
         "--workspace",
-        default=".",
-        help="Workspace root containing the tasks/ directory (default: current directory)",
+        default=None,
+        help="Workspace root containing the tasks/ directory (default: auto-discover Meridian workspace)",
     )
     meridian_subparsers = meridian_parser.add_subparsers(dest="meridian_command")
 
@@ -4450,8 +4450,8 @@ For more help on a command:
     )
     meridian_status.add_argument(
         "--workspace",
-        default=".",
-        help="Workspace root containing the tasks/ directory (default: current directory)",
+        default=None,
+        help="Workspace root containing the tasks/ directory (default: auto-discover Meridian workspace)",
     )
 
     meridian_dispatch = meridian_subparsers.add_parser(
@@ -4460,8 +4460,41 @@ For more help on a command:
     )
     meridian_dispatch.add_argument(
         "--workspace",
-        default=".",
-        help="Workspace root containing the tasks/ directory (default: current directory)",
+        default=None,
+        help="Workspace root containing the tasks/ directory (default: auto-discover Meridian workspace)",
+    )
+
+    meridian_go = meridian_subparsers.add_parser(
+        "go",
+        help="Run a long-lived Meridian orchestration loop",
+    )
+    meridian_go.add_argument(
+        "--workspace",
+        default=None,
+        help="Workspace root containing the tasks/ directory (default: auto-discover Meridian workspace)",
+    )
+    meridian_go.add_argument(
+        "--sleep",
+        type=float,
+        default=15.0,
+        help="Sleep duration in seconds between active delivery passes (default: 15)",
+    )
+    meridian_go.add_argument(
+        "--idle-sleep",
+        type=float,
+        default=60.0,
+        help="Sleep duration in seconds when the workflow is idle or waiting on a human (default: 60)",
+    )
+    meridian_go.add_argument(
+        "--max-passes",
+        type=int,
+        default=None,
+        help="Optional maximum number of passes before stopping",
+    )
+    meridian_go.add_argument(
+        "--once",
+        action="store_true",
+        help="Run a single reconcile+dispatch pass and exit",
     )
 
     meridian_reconcile = meridian_subparsers.add_parser(
@@ -4470,8 +4503,8 @@ For more help on a command:
     )
     meridian_reconcile.add_argument(
         "--workspace",
-        default=".",
-        help="Workspace root containing the tasks/ directory (default: current directory)",
+        default=None,
+        help="Workspace root containing the tasks/ directory (default: auto-discover Meridian workspace)",
     )
 
     meridian_stale = meridian_subparsers.add_parser(
@@ -4480,8 +4513,8 @@ For more help on a command:
     )
     meridian_stale.add_argument(
         "--workspace",
-        default=".",
-        help="Workspace root containing the tasks/ directory (default: current directory)",
+        default=None,
+        help="Workspace root containing the tasks/ directory (default: auto-discover Meridian workspace)",
     )
 
     meridian_leases = meridian_subparsers.add_parser(
@@ -4490,8 +4523,8 @@ For more help on a command:
     )
     meridian_leases.add_argument(
         "--workspace",
-        default=".",
-        help="Workspace root containing the tasks/ directory (default: current directory)",
+        default=None,
+        help="Workspace root containing the tasks/ directory (default: auto-discover Meridian workspace)",
     )
 
     meridian_history = meridian_subparsers.add_parser(
@@ -4501,8 +4534,8 @@ For more help on a command:
     meridian_history.add_argument("task_id", help="Task id or filename")
     meridian_history.add_argument(
         "--workspace",
-        default=".",
-        help="Workspace root containing the tasks/ directory (default: current directory)",
+        default=None,
+        help="Workspace root containing the tasks/ directory (default: auto-discover Meridian workspace)",
     )
 
     meridian_parser.set_defaults(func=cmd_meridian)
