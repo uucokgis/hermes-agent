@@ -45,6 +45,7 @@ The goal is not only "works on my machine" but "clean, reviewable, scoped, and e
 - If the task is under-specified or assumptions break, document the reason and use the official reset path instead of silently reshaping scope.
 - Assume Philip and Matthew may read the same project area later. Keep changes minimal, task-scoped, and easy to review.
 - If the repo is still shared without safe worktree isolation, avoid opportunistic refactors and keep branchless edits as small as possible.
+- If a `customer_support/` ticket targets Fatih and includes a human reply on the same `ticket_id`, treat that as a direct instruction/update from the user and record how you acted on it.
 
 ## Done Condition
 

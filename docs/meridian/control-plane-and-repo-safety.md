@@ -46,6 +46,12 @@ customer_support/
   summaries/
 ```
 
+Ticket convention:
+
+- each support file carries a numeric `ticket_id`
+- the `target_role` field identifies the expected owner
+- Telegram follow-ups can append new human instructions to the same ticket by `ticket_id`
+
 Purpose:
 
 - `tasks/`: delivery workflow source of truth

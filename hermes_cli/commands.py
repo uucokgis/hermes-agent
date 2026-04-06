@@ -127,6 +127,9 @@ COMMAND_REGISTRY: list[CommandDef] = [
     # Info
     CommandDef("commands", "Browse all commands and skills (paginated)", "Info",
                gateway_only=True, args_hint="[page]"),
+    CommandDef("meridian", "Meridian role status and support tickets", "Info",
+               gateway_only=True, args_hint="[status|tickets|ticket ...]",
+               subcommands=("status", "tickets", "ticket")),
     CommandDef("help", "Show available commands", "Info"),
     CommandDef("usage", "Show token usage for the current session", "Info"),
     CommandDef("insights", "Show usage insights and analytics", "Info",

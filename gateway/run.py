@@ -1907,6 +1907,9 @@ class GatewayRunner:
 
         if canonical == "commands":
             return await self._handle_commands_command(event)
+
+        if canonical == "meridian":
+            return await self._handle_meridian_command(event)
         
         if canonical == "profile":
             return await self._handle_profile_command(event)
@@ -3235,6 +3238,94 @@ class GatewayRunner:
         if page != requested_page:
             lines.append(f"_(Requested page {requested_page} was out of range, showing page {page}.)_")
         return "\n".join(lines)
+
+    async def _handle_meridian_command(self, event: MessageEvent) -> str:
+        """Handle /meridian status and customer-support ticket helpers."""
+        from hermes_cli.meridian_support import (
+            append_human_reply,
+            build_roles_status_text,
+            create_support_ticket,
+            format_ticket_detail,
+            format_ticket_summary,
+            get_support_ticket,
+            list_support_tickets,
+        )
+
+        raw_args = event.get_command_args().strip()
+        if not raw_args or raw_args == "status":
+            return build_roles_status_text()
+
+        parts = raw_args.split()
+        subcommand = parts[0].lower()
+        sender = event.source.user_name or event.source.user_id or "telegram-user"
+
+        if subcommand == "tickets":
+            tickets = list_support_tickets(limit=8)
+            if not tickets:
+                return "🎫 No Meridian support tickets yet."
+            lines = ["🎫 **Recent Meridian Tickets**", ""]
+            lines.extend(format_ticket_summary(ticket) for ticket in tickets)
+            lines.extend(
+                [
+                    "",
+                    "Reply with: `/meridian ticket <id> <message>`",
+                    "Create with: `/meridian ticket new <role> <message>`",
+                ]
+            )
+            return "\n".join(lines)
+
+        if subcommand != "ticket":
+            return "Usage: `/meridian [status|tickets|ticket ...]`"
+
+        remainder = parts[1:]
+        if not remainder:
+            return "Usage: `/meridian ticket [new <role> <message> | <id> [message]]`"
+
+        if remainder[0].lower() == "new":
+            if len(remainder) < 3:
+                return "Usage: `/meridian ticket new <philip|fatih|matthew> <message>`"
+            target_role = remainder[1].lower()
+            message = " ".join(remainder[2:]).strip()
+            if target_role not in {"philip", "fatih", "matthew"}:
+                return "Target role must be one of: `philip`, `fatih`, `matthew`."
+            ticket = create_support_ticket(
+                summary=message[:120],
+                message=message,
+                target_role=target_role,
+                source="telegram",
+                sender=sender,
+            )
+            return (
+                f"🎫 Meridian ticket created: `{ticket.ticket_id}` for `{target_role}`.\n\n"
+                f"Reply later with `/meridian ticket {ticket.ticket_id} <message>`"
+            )
+
+        ticket_id_idx = 0
+        if remainder[0].lower() == "id":
+            if len(remainder) < 2:
+                return "Usage: `/meridian ticket id <ticket_id> [message]`"
+            ticket_id_idx = 1
+
+        ticket_id = remainder[ticket_id_idx]
+        message = " ".join(remainder[ticket_id_idx + 1:]).strip()
+        ticket = get_support_ticket(ticket_id)
+        if ticket is None:
+            return f"Ticket not found: `{ticket_id}`"
+
+        if not message:
+            return format_ticket_detail(ticket)
+
+        updated = append_human_reply(
+            ticket.ticket_id,
+            message=message,
+            sender=sender,
+        )
+        target_role = str(updated.metadata.get("target_role") or "philip")
+        return (
+            f"✅ Added your reply to Meridian ticket `{updated.ticket_id}`.\n"
+            f"Target role: `{target_role}`\n"
+            f"Status: `{updated.metadata.get('status', '')}`"
+        )
     
     async def _handle_provider_command(self, event: MessageEvent) -> str:
         """Handle /provider command - show available providers."""

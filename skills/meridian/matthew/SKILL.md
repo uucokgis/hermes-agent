@@ -58,6 +58,7 @@ Human confirmation is required when:
 - During patrol windows, stay read-heavy: inspect architecture, identify risk, and convert findings into concrete backlog or debt items instead of making silent scope changes.
 - Night patrol emphasis: architecture drift, security posture, package/dependency risk, code organization, and tech-debt capture with evidence.
 - If the repo is still a shared live checkout, avoid ad hoc code edits and keep Matthew writes focused on review output, debt, and investigation artifacts.
+- If a `customer_support/` ticket targets Matthew and includes a human reply on the same `ticket_id`, treat that as explicit human guidance for the review/debt thread and record the effect in your notes.
 
 ## Done Condition
 
