@@ -88,22 +88,17 @@ That is acceptable only if code writing remains tightly constrained.
 - researches best practices and preserves what he learns as durable review heuristics
 - acts as the slow, skeptical, principal-reviewer counterweight to Fatih's delivery bias
 
-## Time Windows
+## Availability
 
-Time windows exist to prevent the loops from running hot forever.
+The better model is event-driven availability, not hard wall-clock windows.
 
 Rules:
 
-- work only inside the role's configured window
-- if the window closes mid-task, wrap the bounded task and stop
-- do not start fresh work outside the window
-- move slowly; no urgency theater
-
-Suggested defaults:
-
-- Philip: evening/night orchestration window
-- Matthew: late-night review/security window
-- Fatih: daytime implementation window
+- Philip stays available for backlog, support, and orchestration events
+- Fatih stays available for real implementation events only
+- Matthew stays available for review, risk, and clarification events
+- when there is no meaningful event, the role should stop cleanly instead of manufacturing work
+- behavioral gates matter more than time gates
 
 ## Current Safe Mode
 

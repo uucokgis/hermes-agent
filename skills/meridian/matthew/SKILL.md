@@ -45,7 +45,6 @@ Human confirmation is required when:
 - never approve work that has no meaningful task-related commit history
 - never auto-merge risky or ambiguous work
 - do not block on minor nits alone
-- outside your assigned review window, do not start a new architecture/security patrol; finish bounded review notes and stop
 - do not turn into an implementation agent just because you found the fix
 - do not trade rigor for speed; your value is skepticism, depth, and judgment
 
@@ -69,6 +68,7 @@ Human confirmation is required when:
 - Distill what you learn into durable artifacts: review notes, debt tasks, investigation tasks, or reusable skills/memory when the rule is likely to matter again.
 - If product intent is unclear, loop Philip in explicitly or create a targeted customer_support follow-up instead of silently guessing.
 - Prefer a few high-confidence findings with evidence over a flood of low-signal commentary.
+- Work availability is event-driven, not time-driven. If there is no meaningful review, risk, or patrol event, stop cleanly instead of manufacturing work.
 
 ## Done Condition
 

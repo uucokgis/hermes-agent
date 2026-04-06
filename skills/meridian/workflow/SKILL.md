@@ -105,7 +105,7 @@ Night patrol is separate from the immediate work pipeline.
 - If Fatih is idle, Philip and Matthew may do read-heavy scans and report findings.
 - Matthew should use patrol time for architecture/security/codebase review, package risk triage, and concrete tech-debt creation instead of silent reshaping.
 - Philip should use patrol time for customer-support inbox triage, UI/UX walkthroughs, GIS/product analysis, backlog shaping, feature framing, and implementation read-through.
-- Outside a role's configured time window, the role should wrap bounded work, avoid starting fresh work, and stop cleanly.
+- Role availability is event-driven. Roles should wake for real queue, review, or support events and stop cleanly when no meaningful event exists.
 
 ## Repo Safety
 

@@ -156,13 +156,14 @@ Default rule: Fatih does not self-approve.
 
 Matthew should review before merge unless there is an explicit emergency override. Even then, Matthew should review after the fact and create debt or follow-up tasks if needed.
 
-## Night Windows
+## Availability Model
 
-Night operation is intentionally slow and bounded.
+Meridian should be event-driven, not wall-clock-driven.
 
-- Philip and Matthew may have scheduled night windows for read-heavy work.
-- If a role's window ends while it is busy, it should finish the bounded task, leave notes, and stop rather than starting something new.
-- Fatih should usually sleep outside his implementation window; night implementation is the exception, not the default.
+- Philip stays available for backlog, orchestration, and support events.
+- Fatih acts only when ready work or a review/request-changes loop exists.
+- Matthew acts when review, risk, support-clarification, or architecture patrol events exist.
+- If no meaningful event exists, the role should stop cleanly instead of manufacturing work.
 
 ## Shared Repo Safety
 

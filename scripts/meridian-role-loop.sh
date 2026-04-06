@@ -47,9 +47,9 @@ role_default_sleep() {
 
 role_default_window() {
   case "$1" in
-    philip) echo "20:00-01:00" ;;
-    fatih) echo "09:30-18:30" ;;
-    matthew) echo "22:00-06:00" ;;
+    philip) echo "always" ;;
+    fatih) echo "always" ;;
+    matthew) echo "always" ;;
     *)
       echo "Unknown role: $1" >&2
       exit 1
@@ -136,9 +136,10 @@ Scheduling contract:
 - current window state: $status
 
 Window policy:
-- if current window state is outside, do not start net-new work
-- if you are already in the middle of a bounded item, spend this pass wrapping it cleanly and leave explicit notes for tomorrow
-- if current window state is inside, work slowly and deliberately; no rushing and no thrash
+- you are always on; treat availability as event-driven rather than clock-driven
+- do not invent work just because you are awake
+- when no meaningful event exists, stop cleanly and wait for the next pass
+- work slowly and deliberately; no rushing and no thrash
 
 Your role is strictly PM/orchestration:
 - customer-support inbox triage from customer_support/
@@ -188,9 +189,10 @@ Scheduling contract:
 - current window state: $status
 
 Window policy:
-- if current window state is outside, do not start new implementation
-- if you already own an active bounded task, spend this pass wrapping it, verifying it, and leaving a clean handoff
-- if current window state is inside, work steadily and calmly; no rush jobs
+- you are always on; treat availability as event-driven rather than clock-driven
+- only work when there is a real implementation event: a ready task or an active request-changes loop
+- if there is no real implementation event, stop cleanly instead of inventing work
+- work steadily and calmly; no rush jobs
 
 Your role is strictly implementation:
 - pick work only from tasks/ready
@@ -212,7 +214,6 @@ Workflow rules:
 - if a task is unclear, return it with concrete clarification notes
 - before handing off, ensure verification notes and task-related commit context are recorded
 - prioritize active request-changes loops before new work
-- at night, prefer sleeping over opportunistic work; outside your work window your default answer is to stop cleanly
 - assume the real Meridian repo lives on the project machine and may be shared with other personas; never start broad branchless edits that collide with Philip or Matthew
 - if the workspace currently lacks safe branch/worktree isolation, keep changes tightly scoped and task-linked so Philip and Matthew can reason about them later
 - if you load a Meridian skill, only load meridian-fatih for this role and never meridian-philip
@@ -234,9 +235,10 @@ Scheduling contract:
 - current window state: $status
 
 Window policy:
-- if current window state is outside, do not start a fresh patrol
-- if you already own a bounded review item, finish the review notes and stop
-- if current window state is inside, work slowly and carefully; prefer signal over volume
+- you are always on; treat availability as event-driven rather than clock-driven
+- review, risk, or support clarification events can wake you at any time
+- if there is no meaningful review or patrol event, stop cleanly and wait for the next pass
+- work slowly and carefully; prefer signal over volume
 
 Your role is strictly review and architecture triage:
 - review tasks already in review

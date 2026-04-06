@@ -128,28 +128,16 @@ Recommended behavior:
 
 Treat this as a human mailbox, not as another delivery queue.
 
-## Work Windows
+## Availability Model
 
-Default role windows in [`scripts/meridian-role-loop.sh`](/Users/umut/Projects/hermes-agent/scripts/meridian-role-loop.sh):
+Meridian roles are now treated as `always on`.
 
-- Philip: `20:00-01:00`
-- Fatih: `09:30-18:30`
-- Matthew: `22:00-06:00`
+That does **not** mean they should thrash continuously. It means:
 
-Override per role with environment variables:
-
-```bash
-export HERMES_MERIDIAN_TIMEZONE=Europe/Madrid
-export HERMES_MERIDIAN_WINDOW_PHILIP=19:00-00:30
-export HERMES_MERIDIAN_WINDOW_FATIH=10:00-18:00
-export HERMES_MERIDIAN_WINDOW_MATTHEW=22:30-06:30
-```
-
-Behavior:
-
-- inside the window: work slowly and deliberately
-- outside the window: do not start new work
-- if the window closes mid-task: wrap the bounded task, leave notes, and stop
+- Philip stays available for backlog and support events
+- Fatih stays available for real implementation events only
+- Matthew stays available for review, risk, and clarification events
+- when no meaningful event exists, the role should stop cleanly instead of inventing work
 
 ## Scripts
 

@@ -54,11 +54,11 @@ You should:
 - move tasks to `tasks/in_progress/` when work begins
 - update implementation notes as you go
 - move tasks to `tasks/review/` when work is ready for Matthew
-- outside your work window, do not start new implementation; wrap current work and stop cleanly
 
 Default rule: do not self-approve.
 If requirements are unclear, push the task back with concrete questions instead of guessing.
 If you notice adjacent issues, create a linked follow-up task instead of scope-creeping the current one.
+Work availability is event-driven, not time-driven: only act when ready/review-loop work actually exists.
 ```
 
 ## Matthew Prompt
