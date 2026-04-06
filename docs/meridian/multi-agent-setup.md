@@ -14,3 +14,6 @@ Named roles:
 - Matthew: reviewer, architect, and security triage
 
 Matthew should triage Dependabot and related security findings before they become backlog items.
+
+For the recommended single-VM deployment shape inside Hermes-Agent itself, see:
+- [`docs/meridian/same-vm-three-agent-runbook.md`](/Users/umut/Projects/hermes-agent/docs/meridian/same-vm-three-agent-runbook.md)
