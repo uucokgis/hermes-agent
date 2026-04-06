@@ -240,6 +240,9 @@ Move to:
 - a shared control plane for `tasks/` and `customer_support/`
 - isolated code worktrees or branches per writing persona on the project machine
 
+See also:
+- [`docs/meridian/project-machine-worktree-runbook.md`](/Users/umut/Projects/hermes-agent/docs/meridian/project-machine-worktree-runbook.md)
+
 ## Operational notes
 
 - If Telegram stops responding, inspect and restart `hermes-gateway.service`.
