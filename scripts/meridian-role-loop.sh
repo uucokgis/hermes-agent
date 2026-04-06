@@ -71,6 +71,7 @@ Workflow rules:
 - only move work to ready when acceptance criteria are concrete and dependencies are known
 - if review is blocked because work is unpushed or under-specified, create or update the exact coordinating task instead of trying to review it yourself
 - keep this pass read-heavy and decision-heavy, not code-heavy
+- if you load a Meridian skill, only load meridian-philip for this role
 
 If there is nothing meaningful to change, say so briefly and stop.
 Make one pass, do the immediate PM work that is clearly justified, then stop cleanly.
@@ -101,6 +102,7 @@ Workflow rules:
 - if a task is unclear, return it with concrete clarification notes
 - before handing off, ensure verification notes and task-related commit context are recorded
 - prioritize active request-changes loops before new work
+- if you load a Meridian skill, only load meridian-fatih for this role and never meridian-philip
 
 Make one implementation pass, perform the highest-value justified work, then stop cleanly.
 EOF
@@ -127,6 +129,7 @@ Priority rules:
 - when review finds missing commits, missing verification, or unpushed work, send it back explicitly instead of silently stalling
 - when review queue is empty, do a short read-only architecture/security patrol and convert concrete findings into debt/investigation tasks
 - do not wait for Philip or Fatih if a reviewable item is already present
+- if you load a Meridian skill, only load meridian-matthew for this role
 
 Make one review pass, complete the immediate review work that is clearly available, then stop cleanly.
 EOF
