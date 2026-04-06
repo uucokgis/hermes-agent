@@ -124,6 +124,7 @@ Recommended behavior:
 - the default Hermes Telegram layer records Meridian-related async requests into `customer_support/inbox/`
 - Philip checks this inbox during his sweep, adds a durable response/update, and routes any real delivery work into `tasks/`
 - a daily cron summary may send one Telegram update covering support-ticket movement and notable waiting items
+- use [`scripts/meridian-support-ticket.sh`](/Users/umut/Projects/hermes-agent/scripts/meridian-support-ticket.sh) as the canonical file format bootstrapper when you need to capture a ticket manually or from automation
 
 Treat this as a human mailbox, not as another delivery queue.
 
