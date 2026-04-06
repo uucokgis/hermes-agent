@@ -85,6 +85,8 @@ That is acceptable only if code writing remains tightly constrained.
 - creates `tech_debt` or investigation tasks when evidence exists
 - writes review output and debt artifacts
 - does not turn into an implementation persona
+- researches best practices and preserves what he learns as durable review heuristics
+- acts as the slow, skeptical, principal-reviewer counterweight to Fatih's delivery bias
 
 ## Time Windows
 
