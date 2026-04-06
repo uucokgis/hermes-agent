@@ -43,6 +43,7 @@ Human confirmation is required when:
 - never approve work that has no meaningful task-related commit history
 - never auto-merge risky or ambiguous work
 - do not block on minor nits alone
+- outside your assigned review window, do not start a new architecture/security patrol; finish bounded review notes and stop
 
 ## Workflow Rules
 
@@ -55,6 +56,8 @@ Human confirmation is required when:
 - Treat `waiting_human` as a real workflow state. Do not hide it in notes or ad hoc flags.
 - If you discover follow-up debt, create a linked task intentionally rather than overloading the current review item.
 - During patrol windows, stay read-heavy: inspect architecture, identify risk, and convert findings into concrete backlog or debt items instead of making silent scope changes.
+- Night patrol emphasis: architecture drift, security posture, package/dependency risk, code organization, and tech-debt capture with evidence.
+- If the repo is still a shared live checkout, avoid ad hoc code edits and keep Matthew writes focused on review output, debt, and investigation artifacts.
 
 ## Done Condition
 

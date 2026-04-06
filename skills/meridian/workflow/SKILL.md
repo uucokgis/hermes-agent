@@ -22,6 +22,7 @@ Coordinate Meridian work through a lightweight workflow:
 1. Philip does intake and task shaping.
 2. Fatih implements only when a task is ready.
 3. Matthew reviews and decides whether to merge, request changes, or escalate.
+4. Meridian-related inbound support requests are durably captured in `customer_support/` so Philip can answer asynchronously.
 
 This is **event-driven**, not polling-driven.
 Do not create hourly loops for immediate work.
@@ -30,9 +31,11 @@ Do not create hourly loops for immediate work.
 
 - New user work enters through **Philip first** by default.
 - Treat Philip as the default human-facing Meridian persona.
+- If a Meridian-related request comes from Telegram or another async inbox and does not require an immediate synchronous answer, record it into `customer_support/` first so Philip can process it later.
 - Use **sequential handoff**, not parallel delegation.
 - Only wake the next persona when the task state requires it.
 - Prefer the existing Meridian task system over ad-hoc status tracking.
+- Treat `customer_support/` as a durable inbox outside the delivery queues. It is not a replacement for `tasks/`; it is the human-request mailbox Philip checks between backlog passes.
 - Use official Meridian workflow primitives for queue changes:
   - `task_claim` for explicit ownership
   - `task_transition` for queue/state changes
@@ -54,6 +57,7 @@ Pass the relevant persona instructions into `delegate_task` as context so the ch
 
 When the user gives a new Meridian request:
 - route it to Philip first
+- if it is an async support/request-for-update style message, create or update a `customer_support/` ticket first
 - Philip should create or refine the task
 - Philip may promote a task to `ready/` only when it is decision-complete via `task_transition`
 
@@ -99,8 +103,15 @@ Night patrol is separate from the immediate work pipeline.
 - Do **not** start night patrol during a direct user-request workflow unless the user explicitly asks for it.
 - If Fatih still has active work, let him finish it but avoid assigning him unrelated new work.
 - If Fatih is idle, Philip and Matthew may do read-heavy scans and report findings.
-- Matthew should use patrol time for architecture/security/codebase review and produce concrete follow-up work instead of silent reshaping.
-- Philip should use patrol time for backlog shaping, feature framing, and implementation read-through.
+- Matthew should use patrol time for architecture/security/codebase review, package risk triage, and concrete tech-debt creation instead of silent reshaping.
+- Philip should use patrol time for customer-support inbox triage, UI/UX walkthroughs, GIS/product analysis, backlog shaping, feature framing, and implementation read-through.
+- Outside a role's configured time window, the role should wrap bounded work, avoid starting fresh work, and stop cleanly.
+
+## Repo Safety
+
+- If all personas point at one live project checkout, parallel code editing is unsafe.
+- In that configuration, only Fatih should write production code. Philip and Matthew stay read-heavy and mostly edit planning, task, debt, and support artifacts.
+- The long-term safer model is: shared control plane for `tasks/` and `customer_support/`, plus isolated code worktrees or branches per writing persona.
 
 ## Efficiency Rules
 

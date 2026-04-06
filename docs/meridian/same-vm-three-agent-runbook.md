@@ -1,6 +1,6 @@
 # Meridian Same-VM Three-Agent Runbook
 
-This is the recommended Meridian deployment shape for a single strong host such as `llmsrv`.
+This is the recommended Meridian deployment shape for a split deployment where Hermes/LLM loops run on one strong host such as `llmsrv` and the actual Meridian checkout may live on a separate project machine over SSH.
 
 ## Goal
 
@@ -11,6 +11,11 @@ Run three independent Hermes agents on the same VM:
 - `meridian-matthew` for review, architecture, and security triage
 
 Keep **one** Hermes gateway service for Telegram and cron delivery.
+
+In the current Meridian setup this usually means:
+
+- `106` or `llmsrv`: Hermes gateway, cron, and the Philip/Fatih/Matthew loops
+- `107`: the real Meridian checkout and git state
 
 ## Why this shape
 
@@ -27,8 +32,7 @@ Separate agents on the same VM fix the coordination problem without adding the c
 
 ### Shared
 
-- one repo checkout
-- one Meridian workspace
+- one Meridian coordination workspace
 - one LLM server / model endpoint
 - one Telegram gateway service
 
@@ -38,6 +42,11 @@ Separate agents on the same VM fix the coordination problem without adding the c
 - one headless loop per role
 - one log file per role
 - independent memory/session state per role
+
+### Important topology note
+
+If the real Meridian repo lives on another machine such as `107`, the role profiles should use an SSH terminal backend and point at that machine deliberately.
+Do not assume the repo exists on `106` just because Hermes is running there.
 
 ## Profiles
 
@@ -68,11 +77,14 @@ So the operating split is:
 
 ### Philip
 
+- owns the `customer_support/` inbox for Meridian-related Telegram asks
 - backlog grooming
 - scope tightening
 - prioritization
 - promotion into `tasks/ready`
 - human-facing planning summaries
+- UI/UX walkthroughs
+- GIS-aware product thinking
 
 Philip must not implement or approve code.
 
@@ -85,6 +97,7 @@ Philip must not implement or approve code.
 - hands off into `tasks/review`
 
 Fatih must not self-approve.
+Fatih should be the default code-writing persona.
 
 ### Matthew
 
@@ -94,6 +107,48 @@ Fatih must not self-approve.
 - performs read-only architecture/security patrol only when review is quiet
 
 Matthew must not silently stall on missing pushes or vague handoffs; he should send work back explicitly.
+
+## Customer Support Inbox
+
+Use a top-level `customer_support/` mailbox in the Meridian workspace:
+
+```text
+customer_support/
+  inbox/
+  responded/
+  summaries/
+```
+
+Recommended behavior:
+
+- the default Hermes Telegram layer records Meridian-related async requests into `customer_support/inbox/`
+- Philip checks this inbox during his sweep, adds a durable response/update, and routes any real delivery work into `tasks/`
+- a daily cron summary may send one Telegram update covering support-ticket movement and notable waiting items
+
+Treat this as a human mailbox, not as another delivery queue.
+
+## Work Windows
+
+Default role windows in [`scripts/meridian-role-loop.sh`](/Users/umut/Projects/hermes-agent/scripts/meridian-role-loop.sh):
+
+- Philip: `20:00-01:00`
+- Fatih: `09:30-18:30`
+- Matthew: `22:00-06:00`
+
+Override per role with environment variables:
+
+```bash
+export HERMES_MERIDIAN_TIMEZONE=Europe/Madrid
+export HERMES_MERIDIAN_WINDOW_PHILIP=19:00-00:30
+export HERMES_MERIDIAN_WINDOW_FATIH=10:00-18:00
+export HERMES_MERIDIAN_WINDOW_MATTHEW=22:30-06:30
+```
+
+Behavior:
+
+- inside the window: work slowly and deliberately
+- outside the window: do not start new work
+- if the window closes mid-task: wrap the bounded task, leave notes, and stop
 
 ## Scripts
 
@@ -164,6 +219,25 @@ Why both:
 The daily Meridian report should stay as a cron job on the default profile and deliver through Telegram.
 
 The role loops do not replace that cron. They are there to keep backlog, implementation, and review moving between reports.
+
+## Repo Safety
+
+This is the subtle part.
+
+If Philip, Fatih, and Matthew all point at the same live git checkout on `107`, parallel code editing is unsafe.
+You will get branch confusion, untracked local-state coupling, and review noise.
+
+Current safe rule set:
+
+- Philip stays read-heavy and edits planning/task/support artifacts, not production code
+- Matthew stays read-heavy and edits review/debt artifacts, not production code
+- Fatih is the main code-writing persona
+
+If you later want true parallel code writing, do not keep everyone on one live checkout.
+Move to:
+
+- a shared control plane for `tasks/` and `customer_support/`
+- isolated code worktrees or branches per writing persona on the project machine
 
 ## Operational notes
 

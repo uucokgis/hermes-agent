@@ -37,6 +37,18 @@ Task-per-file is a better fit because it:
 - is easy to inspect manually
 - can later be indexed into a UI or SQLite cache without changing the source format
 
+In addition to the delivery queues, Meridian may maintain a separate human-request inbox:
+
+```text
+customer_support/
+  inbox/
+  responded/
+  summaries/
+```
+
+This mailbox is for Meridian-related inbound Telegram or async user requests.
+It is not part of the delivery queue state machine; Philip owns it as a support and triage inbox.
+
 ## Directory Layout
 
 ```text
@@ -136,8 +148,31 @@ Philip should proactively ask Umut questions only when:
 
 Telegram should not be used for questions that can be answered from code, tests, docs, or recent task history.
 
+Meridian-related inbound Telegram requests that do not need an immediate synchronous answer should be written into `customer_support/` first so Philip can review them asynchronously and prepare a durable response/update.
+
 ## Review Policy
 
 Default rule: Fatih does not self-approve.
 
 Matthew should review before merge unless there is an explicit emergency override. Even then, Matthew should review after the fact and create debt or follow-up tasks if needed.
+
+## Night Windows
+
+Night operation is intentionally slow and bounded.
+
+- Philip and Matthew may have scheduled night windows for read-heavy work.
+- If a role's window ends while it is busy, it should finish the bounded task, leave notes, and stop rather than starting something new.
+- Fatih should usually sleep outside his implementation window; night implementation is the exception, not the default.
+
+## Shared Repo Safety
+
+If all personas point at one live project checkout, parallel code edits are risky.
+
+Current safe posture:
+- Philip: planning, support, backlog, and queue artifacts
+- Matthew: review output, debt, investigation, and queue artifacts
+- Fatih: the primary code-writing persona
+
+Long-term safer posture:
+- shared control plane for `tasks/` and `customer_support/`
+- isolated code worktrees or branches for code-writing personas
