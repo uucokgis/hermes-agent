@@ -68,7 +68,7 @@ start_role() {
     rm -f "$pid_file"
   fi
 
-  nohup bash "$ROLE_LOOP" "$role" "$WORKSPACE" >>"$log_file" 2>&1 &
+  nohup setsid bash "$ROLE_LOOP" "$role" "$WORKSPACE" >>"$log_file" 2>&1 &
   pid=$!
   echo "$pid" >"$pid_file"
   echo "Started $role (pid $pid, log $log_file)"
@@ -84,7 +84,13 @@ stop_role() {
   fi
   pid="$(cat "$pid_file")"
   if kill -0 "$pid" 2>/dev/null; then
-    kill "$pid"
+    # Stop the whole process group so the wrapper bash and its child
+    # hermes chat process do not leak across restarts.
+    kill -TERM "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+    sleep 1
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+    fi
     echo "Stopped $role (pid $pid)"
   else
     echo "$role stale pid file removed"
