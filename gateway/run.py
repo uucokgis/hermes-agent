@@ -1917,11 +1917,20 @@ class GatewayRunner:
         if canonical == "meridian_watch":
             return await self._handle_meridian_watch_command(event)
 
+        if canonical == "meridian_unwatch":
+            return await self._handle_meridian_unwatch_command(event)
+
         if canonical == "meridian_reply":
             return await self._handle_meridian_reply_command(event)
 
         if canonical == "meridian_ask":
             return await self._handle_meridian_ask_command(event)
+
+        if canonical == "meridian_task":
+            return await self._handle_meridian_task_command(event)
+
+        if canonical == "meridian_cancel":
+            return self._handle_meridian_cancel_command(_quick_key)
         
         if canonical == "profile":
             return await self._handle_profile_command(event)
@@ -3277,6 +3286,8 @@ class GatewayRunner:
         return flows
 
     def _set_meridian_flow(self, session_key: str, flow: dict[str, Any]) -> None:
+        flow = dict(flow)
+        flow["created_at"] = time.time()
         self._meridian_flow_state()[session_key] = flow
 
     def _clear_meridian_flow(self, session_key: str) -> None:
@@ -3308,8 +3319,10 @@ class GatewayRunner:
             "`/meridian waiting` — items waiting on you",
             "`/meridian tickets` — recent support tickets",
             "`/meridian_watch` — start a live role watch",
+            "`/meridian_unwatch` — stop a live role watch",
             "`/meridian_reply` — reply to a waiting ticket",
             "`/meridian_ask` — open a new ticket",
+            "`/meridian_task` — inspect a waiting_human task",
         ]
         if active_watchers:
             lines.extend(
@@ -3336,14 +3349,16 @@ class GatewayRunner:
         task_text = format_waiting_human_brief(waiting_tasks)
         ticket_text = format_support_brief(waiting_tickets)
         if task_text:
-            parts.append(task_text)
+            parts.append("**Workflow tasks**\n" + task_text)
         if ticket_text:
-            parts.append(ticket_text)
+            parts.append("**Support replies**\n" + ticket_text)
         if not parts:
             return "✅ Meridian tarafında şu an senden cevap bekleyen bir şey görünmüyor."
         parts.append("")
         parts.append("Reply için: `/meridian_reply`")
         parts.append("Yeni ticket için: `/meridian_ask`")
+        if waiting_tasks:
+            parts.append("Task detayı için: `/meridian_task`")
         return "\n\n".join(parts)
 
     def _meridian_tickets_text(self, *, limit: int = 8) -> str:
@@ -3383,6 +3398,17 @@ class GatewayRunner:
             return "Usage: `/meridian_watch [philip|fatih|matthew|status]`"
         return await self._start_meridian_watch(event.source, role)
 
+    async def _handle_meridian_unwatch_command(self, event: MessageEvent) -> str:
+        raw_args = event.get_command_args().strip()
+        if not raw_args:
+            session_key = self._session_key_for_source(event.source)
+            self._set_meridian_flow(session_key, {"kind": "unwatch", "step": "role"})
+            return "Hangi watcher'ı kapatayım? `philip`, `fatih`, `matthew` ya da `all`"
+        role = raw_args.split()[0].lower()
+        if role not in {"philip", "fatih", "matthew", "all"}:
+            return "Usage: `/meridian_unwatch [philip|fatih|matthew|all]`"
+        return await self._stop_meridian_watch(event.source, role)
+
     async def _handle_meridian_ask_command(self, event: MessageEvent) -> str:
         raw_args = event.get_command_args().strip()
         sender = event.source.user_name or event.source.user_id or "telegram-user"
@@ -3419,6 +3445,21 @@ class GatewayRunner:
             return f"`{ticket.ticket_id}` için yanıtını yaz."
         return self._reply_meridian_ticket(ticket.ticket_id, parts[1].strip(), sender)
 
+    async def _handle_meridian_task_command(self, event: MessageEvent) -> str:
+        raw_args = event.get_command_args().strip()
+        session_key = self._session_key_for_source(event.source)
+        if not raw_args:
+            self._set_meridian_flow(session_key, {"kind": "task", "step": "task_id"})
+            return self._meridian_waiting_task_prompt()
+        return self._meridian_task_detail(raw_args.split()[0])
+
+    def _handle_meridian_cancel_command(self, session_key: str) -> str:
+        flows = self._meridian_flow_state()
+        if session_key not in flows:
+            return "No active Meridian flow to cancel."
+        self._clear_meridian_flow(session_key)
+        return "Cancelled the active Meridian flow."
+
     def _create_meridian_ticket(self, role: str, message: str, sender: str) -> str:
         from hermes_cli.meridian_support import create_support_ticket
 
@@ -3449,12 +3490,67 @@ class GatewayRunner:
             f"Status: `{updated.metadata.get('status', '')}`"
         )
 
+    def _meridian_waiting_task_prompt(self) -> str:
+        from hermes_cli.meridian_notifier import collect_snapshot, waiting_human_tasks
+
+        tasks = waiting_human_tasks(collect_snapshot())
+        if not tasks:
+            return "✅ Şu an waiting_human task görünmüyor."
+        lines = ["🧩 waiting_human task'lar", ""]
+        for name in tasks[:8]:
+            lines.append(f"- `{name}`")
+        lines.append("")
+        lines.append("Detayını görmek istediğin task ID veya dosya adını yaz.")
+        return "\n".join(lines)
+
+    def _meridian_task_detail(self, task_id: str) -> str:
+        from hermes_cli.meridian_support import resolve_support_workspace
+        from hermes_cli.meridian_workflow import locate_task
+
+        try:
+            workspace = resolve_support_workspace()
+            document = locate_task(workspace, task_id)
+        except Exception:
+            return f"Task not found: `{task_id}`"
+
+        metadata = document.metadata
+        history = metadata.get("workflow_history") or []
+        lines = [
+            f"🧩 **Meridian Task `{document.task_id}`**",
+            "",
+            f"Queue: `{document.queue}`",
+            f"Status: `{metadata.get('status', document.queue)}`",
+        ]
+        if metadata.get("waiting_on"):
+            lines.append(f"Waiting on: `{metadata.get('waiting_on')}`")
+        if metadata.get("blocked_reason"):
+            lines.append(f"Blocked reason: {metadata.get('blocked_reason')}")
+        if metadata.get("updated_at"):
+            lines.append(f"Updated: {str(metadata.get('updated_at'))[:19].replace('T', ' ')}")
+        if history:
+            lines.extend(["", "**Recent history**"])
+            for item in history[-4:]:
+                lines.append(
+                    f"- {item.get('at', '')[:16].replace('T', ' ')} {item.get('event', '-')} "
+                    f"{item.get('from_queue', item.get('queue', '-'))} -> {item.get('to_queue', '-')}"
+                )
+        lines.extend(
+            [
+                "",
+                "If you need to answer the team with context, use `/meridian_ask philip ...` or the relevant role.",
+            ]
+        )
+        return "\n".join(lines)
+
     async def _handle_pending_meridian_flow(self, event: MessageEvent, session_key: str) -> str | None:
         from hermes_cli.meridian_support import get_support_ticket
 
         flow = self._meridian_flow_state().get(session_key)
         if not flow:
             return None
+        if time.time() - float(flow.get("created_at") or 0.0) > 600:
+            self._clear_meridian_flow(session_key)
+            return "Meridian flow timed out. Start again with `/meridian`, `/meridian_watch`, `/meridian_reply`, `/meridian_ask`, or `/meridian_task`."
         text = event.text.strip()
         sender = event.source.user_name or event.source.user_id or "telegram-user"
         kind = flow.get("kind")
@@ -3469,6 +3565,13 @@ class GatewayRunner:
                 return "Persona olarak `philip`, `fatih`, `matthew` ya da `status` yaz."
             self._clear_meridian_flow(session_key)
             return await self._start_meridian_watch(event.source, role)
+
+        if kind == "unwatch" and step == "role":
+            role = text.lower()
+            if role not in {"philip", "fatih", "matthew", "all"}:
+                return "Watcher olarak `philip`, `fatih`, `matthew` ya da `all` yaz."
+            self._clear_meridian_flow(session_key)
+            return await self._stop_meridian_watch(event.source, role)
 
         if kind == "ask" and step == "role":
             role = text.lower()
@@ -3497,6 +3600,12 @@ class GatewayRunner:
                 return "Yanıt boş olmasın; kısa cevabı yaz."
             self._clear_meridian_flow(session_key)
             return self._reply_meridian_ticket(ticket_id, text, sender)
+
+        if kind == "task" and step == "task_id":
+            if not text:
+                return "Task ID veya dosya adı yaz."
+            self._clear_meridian_flow(session_key)
+            return self._meridian_task_detail(text)
 
         self._clear_meridian_flow(session_key)
         return None
@@ -3557,12 +3666,25 @@ class GatewayRunner:
             line = entry.strip(" \t│╭╰─")
             if not line:
                 continue
+            if not any(ch.isalnum() for ch in line):
+                continue
+            compact = line.replace(" ", "")
+            if compact and len(set(compact)) == 1:
+                continue
             if line.startswith(("===", "┊", "$", "Hermes", "Profile exists:", "Started ", "Stopped ")):
                 continue
             if "preparing " in line:
                 continue
+            if line.startswith(("----", "____", "....", "~~~~")):
+                continue
             lines.append(line)
-        return lines
+        # Keep order but drop immediate duplicates inside the same chunk.
+        deduped: list[str] = []
+        for line in lines:
+            if deduped and deduped[-1] == line:
+                continue
+            deduped.append(line)
+        return deduped
 
     async def _run_meridian_watch(self, source: "SessionSource", role: str) -> None:
         adapter = self.adapters.get(source.platform)
@@ -3574,6 +3696,7 @@ class GatewayRunner:
         log_path = Path.home() / ".hermes" / "meridian" / "loops" / f"{role}.loop.log"
         metadata = {"thread_id": source.thread_id} if source.thread_id else None
         position = log_path.stat().st_size if log_path.exists() else 0
+        last_excerpt = ""
 
         try:
             while True:
@@ -3593,6 +3716,9 @@ class GatewayRunner:
                 if not lines:
                     continue
                 excerpt = "\n".join(f"- {line}" for line in lines[-8:])
+                if excerpt == last_excerpt:
+                    continue
+                last_excerpt = excerpt
                 await adapter.send(
                     chat_id=source.chat_id,
                     content=f"👀 `{role}` update\n{excerpt}",

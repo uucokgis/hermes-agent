@@ -88,6 +88,16 @@ def test_meridian_waiting_command_returns_waiting_summary(monkeypatch):
     assert result == "waiting summary"
 
 
+def test_meridian_cancel_clears_pending_flow():
+    runner = _make_runner()
+    runner._pending_meridian_flows = {"agent:main:telegram:dm:c1:u1": {"kind": "ask", "step": "role", "created_at": 1.0}}
+
+    result = runner._handle_meridian_cancel_command("agent:main:telegram:dm:c1:u1")
+
+    assert "Cancelled" in result
+    assert runner._pending_meridian_flows == {}
+
+
 def test_meridian_watch_command_starts_watcher(monkeypatch):
     runner = _make_runner()
     runner._background_tasks = set()
@@ -116,6 +126,22 @@ def test_meridian_watch_status_reports_active_roles():
 
     assert "fatih" in result
     assert "matthew" in result
+
+
+def test_meridian_unwatch_command_stops_specific_watcher():
+    runner = _make_runner()
+    called = {}
+
+    async def _fake_stop(source, role):
+        called["role"] = role
+        return f"stopped {role}"
+
+    runner._stop_meridian_watch = _fake_stop
+
+    result = asyncio.run(runner._handle_meridian_unwatch_command(_make_event("/meridian_unwatch fatih")))
+
+    assert result == "stopped fatih"
+    assert called["role"] == "fatih"
 
 
 def test_meridian_ask_command_creates_ticket(monkeypatch):
@@ -178,9 +204,18 @@ def test_meridian_reply_command_without_args_prompts_with_waiting_tickets(monkey
     assert "Yanıtlamak istediğin ticket ID" in result
 
 
+def test_meridian_task_command_without_args_prompts_waiting_tasks(monkeypatch):
+    runner = _make_runner()
+    monkeypatch.setattr(runner, "_meridian_waiting_task_prompt", lambda: "task prompt")
+
+    result = asyncio.run(runner._handle_meridian_task_command(_make_event("/meridian_task")))
+
+    assert result == "task prompt"
+
+
 def test_pending_meridian_ask_flow_collects_role_then_message(monkeypatch):
     runner = _make_runner()
-    runner._pending_meridian_flows = {"agent:main:telegram:dm:c1:u1": {"kind": "ask", "step": "role"}}
+    runner._pending_meridian_flows = {"agent:main:telegram:dm:c1:u1": {"kind": "ask", "step": "role", "created_at": 9999999999}}
     monkeypatch.setattr(
         "hermes_cli.meridian_support.create_support_ticket",
         lambda **_kwargs: SimpleNamespace(ticket_id="20260407001"),
@@ -191,3 +226,32 @@ def test_pending_meridian_ask_flow_collects_role_then_message(monkeypatch):
 
     assert "mesajı yaz" in first
     assert "20260407001" in second
+
+
+def test_pending_meridian_flow_times_out():
+    runner = _make_runner()
+    runner._pending_meridian_flows = {"agent:main:telegram:dm:c1:u1": {"kind": "ask", "step": "role", "created_at": 0.0}}
+
+    result = asyncio.run(runner._handle_pending_meridian_flow(_make_event("fatih"), "agent:main:telegram:dm:c1:u1"))
+
+    assert "timed out" in result
+
+
+def test_meridian_watch_filter_drops_separator_noise():
+    runner = _make_runner()
+
+    lines = runner._filter_meridian_watch_lines(
+        "\n".join(
+            [
+                "-----",
+                "=======",
+                "Profile exists: meridian-fatih",
+                "preparing workspace",
+                "Meaningful update",
+                "Meaningful update",
+                "task moved to review",
+            ]
+        )
+    )
+
+    assert lines == ["Meaningful update", "task moved to review"]
