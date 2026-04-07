@@ -48,3 +48,78 @@ def test_run_waiting_human_notifier_detects_changes_and_formats_brief(tmp_path, 
     assert result2["has_waiting_human"] is True
     assert result2["changed"] is True
     assert "task-c.md" in result2["brief"]
+
+
+def test_tickets_needing_human_only_when_agent_updated_after_human_reply():
+    silent = mn.SupportTicketSnapshot(
+        ticket_id="20260408001",
+        queue="inbox",
+        summary="silent",
+        status="human_replied",
+        updated_at="2026-04-08T10:00:00+00:00",
+        last_human_reply_at="2026-04-08T10:00:00+00:00",
+    )
+    active = mn.SupportTicketSnapshot(
+        ticket_id="20260408002",
+        queue="inbox",
+        summary="needs answer",
+        status="pending_role",
+        updated_at="2026-04-08T11:00:00+00:00",
+        last_human_reply_at="2026-04-08T10:00:00+00:00",
+    )
+
+    result = mn.tickets_needing_human(
+        {
+            silent.ticket_id: silent,
+            active.ticket_id: active,
+        }
+    )
+
+    assert [item.ticket_id for item in result] == ["20260408002"]
+
+
+def test_run_waiting_human_notifier_includes_support_ticket_followups(tmp_path, monkeypatch):
+    state_path = tmp_path / "waiting.json"
+    task_snapshots = iter([{}, {}])
+    support_snapshots = iter(
+        [
+            {
+                "20260408001": mn.SupportTicketSnapshot(
+                    ticket_id="20260408001",
+                    queue="inbox",
+                    summary="already answered",
+                    status="human_replied",
+                    updated_at="2026-04-08T10:00:00+00:00",
+                    last_human_reply_at="2026-04-08T10:00:00+00:00",
+                ),
+            },
+            {
+                "20260408001": mn.SupportTicketSnapshot(
+                    ticket_id="20260408001",
+                    queue="inbox",
+                    summary="already answered",
+                    status="human_replied",
+                    updated_at="2026-04-08T10:00:00+00:00",
+                    last_human_reply_at="2026-04-08T10:00:00+00:00",
+                ),
+                "20260408002": mn.SupportTicketSnapshot(
+                    ticket_id="20260408002",
+                    queue="inbox",
+                    summary="agent asked follow-up",
+                    status="pending_role",
+                    updated_at="2026-04-08T11:00:00+00:00",
+                    last_human_reply_at="2026-04-08T10:30:00+00:00",
+                ),
+            },
+        ]
+    )
+    monkeypatch.setattr(mn, "collect_snapshot", lambda: next(task_snapshots))
+    monkeypatch.setattr(mn, "collect_support_snapshot", lambda: next(support_snapshots))
+
+    result1 = mn.run_waiting_human_notifier(state_path=state_path)
+    result2 = mn.run_waiting_human_notifier(state_path=state_path)
+
+    assert result1["has_support_waiting"] is False
+    assert result2["has_support_waiting"] is True
+    assert result2["changed"] is True
+    assert "20260408002" in result2["brief"]
