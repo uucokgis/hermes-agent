@@ -1882,6 +1882,9 @@ class GatewayRunner:
 
         # Check for commands
         command = event.get_command()
+        pending_meridian_flows = getattr(self, "_pending_meridian_flows", {})
+        if not command and _quick_key in pending_meridian_flows:
+            return await self._handle_pending_meridian_flow(event, _quick_key)
         
         # Emit command:* hook for any recognized slash command.
         # GATEWAY_KNOWN_COMMANDS is derived from the central COMMAND_REGISTRY
@@ -1910,6 +1913,15 @@ class GatewayRunner:
 
         if canonical == "meridian":
             return await self._handle_meridian_command(event)
+
+        if canonical == "meridian_watch":
+            return await self._handle_meridian_watch_command(event)
+
+        if canonical == "meridian_reply":
+            return await self._handle_meridian_reply_command(event)
+
+        if canonical == "meridian_ask":
+            return await self._handle_meridian_ask_command(event)
         
         if canonical == "profile":
             return await self._handle_profile_command(event)
@@ -3240,95 +3252,193 @@ class GatewayRunner:
         return "\n".join(lines)
 
     async def _handle_meridian_command(self, event: MessageEvent) -> str:
-        """Handle /meridian status and customer-support ticket helpers."""
-        from hermes_cli.meridian_support import (
-            append_human_reply,
-            build_roles_status_text,
-            create_support_ticket,
-            format_ticket_detail,
-            format_ticket_summary,
-            get_support_ticket,
-            list_support_tickets,
-        )
-
+        """Handle /meridian status, waiting, and ticket helpers."""
         raw_args = event.get_command_args().strip()
-        if not raw_args or raw_args == "status":
+        if not raw_args:
+            return self._meridian_menu_text(event.source)
+        if raw_args == "status":
+            from hermes_cli.meridian_support import build_roles_status_text
+
             return build_roles_status_text()
 
-        parts = raw_args.split()
-        subcommand = parts[0].lower()
-        sender = event.source.user_name or event.source.user_id or "telegram-user"
-
-        if subcommand in {"watch", "unwatch"}:
-            role = parts[1].lower() if len(parts) > 1 else ""
-            if subcommand == "watch" and role == "status":
-                return self._meridian_watch_status(event.source)
-            if subcommand == "unwatch" and role == "all":
-                return await self._stop_meridian_watch(event.source, "all")
-            if role not in {"philip", "fatih", "matthew"}:
-                return "Usage: `/meridian watch <philip|fatih|matthew|status>` or `/meridian unwatch <philip|fatih|matthew|all>`"
-            if subcommand == "watch":
-                return await self._start_meridian_watch(event.source, role)
-            return await self._stop_meridian_watch(event.source, role)
-
+        subcommand = raw_args.split()[0].lower()
+        if subcommand == "waiting":
+            return self._meridian_waiting_text()
         if subcommand == "tickets":
-            tickets = list_support_tickets(limit=8)
-            if not tickets:
-                return "🎫 No Meridian support tickets yet."
-            lines = ["🎫 **Recent Meridian Tickets**", ""]
-            lines.extend(format_ticket_summary(ticket) for ticket in tickets)
+            return self._meridian_tickets_text(limit=8)
+
+        return self._meridian_menu_text(event.source)
+
+    def _meridian_flow_state(self) -> dict[str, dict[str, Any]]:
+        flows = getattr(self, "_pending_meridian_flows", None)
+        if flows is None:
+            flows = {}
+            self._pending_meridian_flows = flows
+        return flows
+
+    def _set_meridian_flow(self, session_key: str, flow: dict[str, Any]) -> None:
+        self._meridian_flow_state()[session_key] = flow
+
+    def _clear_meridian_flow(self, session_key: str) -> None:
+        self._meridian_flow_state().pop(session_key, None)
+
+    def _tickets_waiting_on_human(self):
+        from hermes_cli.meridian_notifier import collect_support_snapshot, tickets_needing_human
+
+        return tickets_needing_human(collect_support_snapshot())
+
+    def _meridian_menu_text(self, source: "SessionSource") -> str:
+        from hermes_cli.meridian_notifier import collect_snapshot, waiting_human_tasks
+
+        waiting_tasks = waiting_human_tasks(collect_snapshot())
+        waiting_tickets = self._tickets_waiting_on_human()
+        watchers = getattr(self, "_meridian_log_watchers", {})
+        prefix = self._meridian_watch_key(source, "")
+        active_watchers = sorted(key.split(":")[-1] for key in watchers if key.startswith(prefix))
+
+        lines = [
+            "🧭 **Meridian Menu**",
+            "",
+            f"Waiting tasks: `{len(waiting_tasks)}`",
+            f"Waiting tickets: `{len(waiting_tickets)}`",
+            f"Active watchers: `{len(active_watchers)}`",
+            "",
+            "**Quick actions**",
+            "`/meridian status` — live role + workspace status",
+            "`/meridian waiting` — items waiting on you",
+            "`/meridian tickets` — recent support tickets",
+            "`/meridian_watch` — start a live role watch",
+            "`/meridian_reply` — reply to a waiting ticket",
+            "`/meridian_ask` — open a new ticket",
+        ]
+        if active_watchers:
             lines.extend(
                 [
                     "",
-                    "Reply with: `/meridian ticket <id> <message>`",
-                    "Create with: `/meridian ticket new <role> <message>`",
+                    "Watching now: " + ", ".join(f"`{role}`" for role in active_watchers),
                 ]
             )
-            return "\n".join(lines)
-
-        if subcommand != "ticket":
-            return "Usage: `/meridian [status|tickets|ticket|watch|unwatch ...]`"
-
-        remainder = parts[1:]
-        if not remainder:
-            return "Usage: `/meridian ticket [new <role> <message> | <id> [message]]`"
-
-        if remainder[0].lower() == "new":
-            if len(remainder) < 3:
-                return "Usage: `/meridian ticket new <philip|fatih|matthew> <message>`"
-            target_role = remainder[1].lower()
-            message = " ".join(remainder[2:]).strip()
-            if target_role not in {"philip", "fatih", "matthew"}:
-                return "Target role must be one of: `philip`, `fatih`, `matthew`."
-            ticket = create_support_ticket(
-                summary=message[:120],
-                message=message,
-                target_role=target_role,
-                source="telegram",
-                sender=sender,
+        if waiting_tasks or waiting_tickets:
+            lines.extend(
+                [
+                    "",
+                    "Tip: `/meridian waiting` shows the exact items that still need you.",
+                ]
             )
-            return (
-                f"🎫 Meridian ticket created: `{ticket.ticket_id}` for `{target_role}`.\n\n"
-                f"Reply later with `/meridian ticket {ticket.ticket_id} <message>`"
-            )
+        return "\n".join(lines)
 
-        ticket_id_idx = 0
-        if remainder[0].lower() == "id":
-            if len(remainder) < 2:
-                return "Usage: `/meridian ticket id <ticket_id> [message]`"
-            ticket_id_idx = 1
+    def _meridian_waiting_text(self) -> str:
+        from hermes_cli.meridian_notifier import collect_snapshot, format_waiting_human_brief, waiting_human_tasks, format_support_brief
 
-        ticket_id = remainder[ticket_id_idx]
-        message = " ".join(remainder[ticket_id_idx + 1:]).strip()
-        ticket = get_support_ticket(ticket_id)
+        waiting_tasks = waiting_human_tasks(collect_snapshot())
+        waiting_tickets = self._tickets_waiting_on_human()
+        parts = []
+        task_text = format_waiting_human_brief(waiting_tasks)
+        ticket_text = format_support_brief(waiting_tickets)
+        if task_text:
+            parts.append(task_text)
+        if ticket_text:
+            parts.append(ticket_text)
+        if not parts:
+            return "✅ Meridian tarafında şu an senden cevap bekleyen bir şey görünmüyor."
+        parts.append("")
+        parts.append("Reply için: `/meridian_reply`")
+        parts.append("Yeni ticket için: `/meridian_ask`")
+        return "\n\n".join(parts)
+
+    def _meridian_tickets_text(self, *, limit: int = 8) -> str:
+        from hermes_cli.meridian_support import (
+            format_ticket_summary,
+            list_support_tickets,
+        )
+        tickets = list_support_tickets(limit=limit)
+        if not tickets:
+            return "🎫 No Meridian support tickets yet."
+        lines = ["🎫 **Recent Meridian Tickets**", ""]
+        lines.extend(format_ticket_summary(ticket) for ticket in tickets)
+        lines.extend(["", "Reply: `/meridian_reply`", "Ask: `/meridian_ask`"])
+        return "\n".join(lines)
+
+    def _meridian_waiting_ticket_prompt(self) -> str:
+        tickets = self._tickets_waiting_on_human()
+        if not tickets:
+            return "✅ Şu an senden cevap bekleyen support ticket yok."
+        lines = ["🎫 Reply bekleyen ticket'lar", ""]
+        for item in tickets[:8]:
+            lines.append(f"- `{item.ticket_id}` [{item.status or item.queue}] {item.summary}")
+        lines.append("")
+        lines.append("Yanıtlamak istediğin ticket ID'sini yaz.")
+        return "\n".join(lines)
+
+    async def _handle_meridian_watch_command(self, event: MessageEvent) -> str:
+        raw_args = event.get_command_args().strip()
+        if not raw_args:
+            session_key = self._session_key_for_source(event.source)
+            self._set_meridian_flow(session_key, {"kind": "watch", "step": "role"})
+            return "Hangi persona logunu izleyelim? `philip`, `fatih`, `matthew` ya da `status` yaz."
+        role = raw_args.split()[0].lower()
+        if role == "status":
+            return self._meridian_watch_status(event.source)
+        if role not in {"philip", "fatih", "matthew"}:
+            return "Usage: `/meridian_watch [philip|fatih|matthew|status]`"
+        return await self._start_meridian_watch(event.source, role)
+
+    async def _handle_meridian_ask_command(self, event: MessageEvent) -> str:
+        raw_args = event.get_command_args().strip()
+        sender = event.source.user_name or event.source.user_id or "telegram-user"
+        session_key = self._session_key_for_source(event.source)
+        parts = raw_args.split(maxsplit=1) if raw_args else []
+        if not parts:
+            self._set_meridian_flow(session_key, {"kind": "ask", "step": "role"})
+            return "Kime yazayım? `philip`, `fatih`, `matthew`"
+        role = parts[0].lower()
+        if role not in {"philip", "fatih", "matthew"}:
+            return "Role must be one of: `philip`, `fatih`, `matthew`."
+        if len(parts) == 1 or not parts[1].strip():
+            self._set_meridian_flow(session_key, {"kind": "ask", "step": "message", "role": role})
+            return f"`{role}` için mesajı yaz."
+        return self._create_meridian_ticket(role, parts[1].strip(), sender)
+
+    async def _handle_meridian_reply_command(self, event: MessageEvent) -> str:
+        from hermes_cli.meridian_support import get_support_ticket
+
+        raw_args = event.get_command_args().strip()
+        sender = event.source.user_name or event.source.user_id or "telegram-user"
+        session_key = self._session_key_for_source(event.source)
+        if not raw_args:
+            if not self._tickets_waiting_on_human():
+                return "✅ Şu an senden reply bekleyen ticket görünmüyor."
+            self._set_meridian_flow(session_key, {"kind": "reply", "step": "ticket"})
+            return self._meridian_waiting_ticket_prompt()
+        parts = raw_args.split(maxsplit=1)
+        ticket = get_support_ticket(parts[0])
         if ticket is None:
-            return f"Ticket not found: `{ticket_id}`"
+            return f"Ticket not found: `{parts[0]}`"
+        if len(parts) == 1 or not parts[1].strip():
+            self._set_meridian_flow(session_key, {"kind": "reply", "step": "message", "ticket_id": ticket.ticket_id})
+            return f"`{ticket.ticket_id}` için yanıtını yaz."
+        return self._reply_meridian_ticket(ticket.ticket_id, parts[1].strip(), sender)
 
-        if not message:
-            return format_ticket_detail(ticket)
+    def _create_meridian_ticket(self, role: str, message: str, sender: str) -> str:
+        from hermes_cli.meridian_support import create_support_ticket
+
+        ticket = create_support_ticket(
+            summary=message[:120],
+            message=message,
+            target_role=role,
+            source="telegram",
+            sender=sender,
+        )
+        return (
+            f"🎫 Meridian ticket created: `{ticket.ticket_id}` for `{role}`.\n\n"
+            "Need follow-up later? Use `/meridian_reply`."
+        )
+
+    def _reply_meridian_ticket(self, ticket_id: str, message: str, sender: str) -> str:
+        from hermes_cli.meridian_support import append_human_reply
 
         updated = append_human_reply(
-            ticket.ticket_id,
+            ticket_id,
             message=message,
             sender=sender,
         )
@@ -3338,6 +3448,58 @@ class GatewayRunner:
             f"Target role: `{target_role}`\n"
             f"Status: `{updated.metadata.get('status', '')}`"
         )
+
+    async def _handle_pending_meridian_flow(self, event: MessageEvent, session_key: str) -> str | None:
+        from hermes_cli.meridian_support import get_support_ticket
+
+        flow = self._meridian_flow_state().get(session_key)
+        if not flow:
+            return None
+        text = event.text.strip()
+        sender = event.source.user_name or event.source.user_id or "telegram-user"
+        kind = flow.get("kind")
+        step = flow.get("step")
+
+        if kind == "watch" and step == "role":
+            role = text.lower()
+            if role == "status":
+                self._clear_meridian_flow(session_key)
+                return self._meridian_watch_status(event.source)
+            if role not in {"philip", "fatih", "matthew"}:
+                return "Persona olarak `philip`, `fatih`, `matthew` ya da `status` yaz."
+            self._clear_meridian_flow(session_key)
+            return await self._start_meridian_watch(event.source, role)
+
+        if kind == "ask" and step == "role":
+            role = text.lower()
+            if role not in {"philip", "fatih", "matthew"}:
+                return "Role olarak `philip`, `fatih`, `matthew` yaz."
+            self._set_meridian_flow(session_key, {"kind": "ask", "step": "message", "role": role})
+            return f"`{role}` için mesajı yaz."
+
+        if kind == "ask" and step == "message":
+            role = str(flow.get("role") or "").lower()
+            if not text:
+                return "Mesaj boş olmasın; kısa bir not yaz."
+            self._clear_meridian_flow(session_key)
+            return self._create_meridian_ticket(role, text, sender)
+
+        if kind == "reply" and step == "ticket":
+            ticket = get_support_ticket(text)
+            if ticket is None:
+                return self._meridian_waiting_ticket_prompt()
+            self._set_meridian_flow(session_key, {"kind": "reply", "step": "message", "ticket_id": ticket.ticket_id})
+            return f"`{ticket.ticket_id}` için yanıtını yaz."
+
+        if kind == "reply" and step == "message":
+            ticket_id = str(flow.get("ticket_id") or "")
+            if not text:
+                return "Yanıt boş olmasın; kısa cevabı yaz."
+            self._clear_meridian_flow(session_key)
+            return self._reply_meridian_ticket(ticket_id, text, sender)
+
+        self._clear_meridian_flow(session_key)
+        return None
 
     def _meridian_watch_key(self, source: "SessionSource", role: str) -> str:
         thread = f":{source.thread_id}" if source.thread_id else ""

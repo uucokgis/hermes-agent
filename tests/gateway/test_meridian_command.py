@@ -70,6 +70,24 @@ def test_meridian_status_command_returns_role_summary(monkeypatch):
     assert result == "Meridian role summary"
 
 
+def test_meridian_default_command_returns_menu(monkeypatch):
+    runner = _make_runner()
+    monkeypatch.setattr(runner, "_meridian_menu_text", lambda source: "menu text")
+
+    result = asyncio.run(runner._handle_meridian_command(_make_event("/meridian")))
+
+    assert result == "menu text"
+
+
+def test_meridian_waiting_command_returns_waiting_summary(monkeypatch):
+    runner = _make_runner()
+    monkeypatch.setattr(runner, "_meridian_waiting_text", lambda: "waiting summary")
+
+    result = asyncio.run(runner._handle_meridian_command(_make_event("/meridian waiting")))
+
+    assert result == "waiting summary"
+
+
 def test_meridian_watch_command_starts_watcher(monkeypatch):
     runner = _make_runner()
     runner._background_tasks = set()
@@ -81,27 +99,10 @@ def test_meridian_watch_command_starts_watcher(monkeypatch):
 
     runner._start_meridian_watch = _fake_start
 
-    result = asyncio.run(runner._handle_meridian_command(_make_event("/meridian watch fatih")))
+    result = asyncio.run(runner._handle_meridian_watch_command(_make_event("/meridian_watch fatih")))
 
     assert result == "watching fatih"
     assert called["role"] == "fatih"
-
-
-def test_meridian_unwatch_all_command_stops_watchers(monkeypatch):
-    runner = _make_runner()
-    runner._background_tasks = set()
-    called = {}
-
-    async def _fake_stop(source, role):
-        called["role"] = role
-        return f"stopped {role}"
-
-    runner._stop_meridian_watch = _fake_stop
-
-    result = asyncio.run(runner._handle_meridian_command(_make_event("/meridian unwatch all")))
-
-    assert result == "stopped all"
-    assert called["role"] == "all"
 
 
 def test_meridian_watch_status_reports_active_roles():
@@ -111,13 +112,13 @@ def test_meridian_watch_status_reports_active_roles():
         "telegram:c1:matthew": object(),
     }
 
-    result = asyncio.run(runner._handle_meridian_command(_make_event("/meridian watch status")))
+    result = asyncio.run(runner._handle_meridian_watch_command(_make_event("/meridian_watch status")))
 
     assert "fatih" in result
     assert "matthew" in result
 
 
-def test_meridian_ticket_new_creates_ticket(monkeypatch):
+def test_meridian_ask_command_creates_ticket(monkeypatch):
     runner = _make_runner()
     fake_ticket = SimpleNamespace(ticket_id="20260407001")
     monkeypatch.setattr(
@@ -126,8 +127,8 @@ def test_meridian_ticket_new_creates_ticket(monkeypatch):
     )
 
     result = asyncio.run(
-        runner._handle_meridian_command(
-            _make_event("/meridian ticket new fatih drawing editor issue")
+        runner._handle_meridian_ask_command(
+            _make_event("/meridian_ask fatih drawing editor issue")
         )
     )
 
@@ -135,7 +136,7 @@ def test_meridian_ticket_new_creates_ticket(monkeypatch):
     assert "fatih" in result
 
 
-def test_meridian_ticket_reply_appends_human_reply(monkeypatch):
+def test_meridian_reply_command_appends_human_reply(monkeypatch):
     runner = _make_runner()
     existing = SimpleNamespace(ticket_id="20260407001")
     updated = SimpleNamespace(
@@ -152,8 +153,8 @@ def test_meridian_ticket_reply_appends_human_reply(monkeypatch):
     )
 
     result = asyncio.run(
-        runner._handle_meridian_command(
-            _make_event("/meridian ticket 20260407001 please focus on package risk first")
+        runner._handle_meridian_reply_command(
+            _make_event("/meridian_reply 20260407001 please focus on package risk first")
         )
     )
 
@@ -161,22 +162,32 @@ def test_meridian_ticket_reply_appends_human_reply(monkeypatch):
     assert "matthew" in result
 
 
-def test_meridian_ticket_show_formats_existing_ticket(monkeypatch):
+def test_meridian_reply_command_without_args_prompts_with_waiting_tickets(monkeypatch):
     runner = _make_runner()
-    ticket = SimpleNamespace(ticket_id="20260407001")
     monkeypatch.setattr(
-        "hermes_cli.meridian_support.get_support_ticket",
-        lambda _ticket_id: ticket,
-    )
-    monkeypatch.setattr(
-        "hermes_cli.meridian_support.format_ticket_detail",
-        lambda _ticket: "ticket detail",
+        runner,
+        "_tickets_waiting_on_human",
+        lambda: [
+            SimpleNamespace(ticket_id="20260407001", status="pending_role", queue="inbox", summary="Need answer")
+        ],
     )
 
-    result = asyncio.run(
-        runner._handle_meridian_command(
-            _make_event("/meridian ticket 20260407001")
-        )
+    result = asyncio.run(runner._handle_meridian_reply_command(_make_event("/meridian_reply")))
+
+    assert "20260407001" in result
+    assert "Yanıtlamak istediğin ticket ID" in result
+
+
+def test_pending_meridian_ask_flow_collects_role_then_message(monkeypatch):
+    runner = _make_runner()
+    runner._pending_meridian_flows = {"agent:main:telegram:dm:c1:u1": {"kind": "ask", "step": "role"}}
+    monkeypatch.setattr(
+        "hermes_cli.meridian_support.create_support_ticket",
+        lambda **_kwargs: SimpleNamespace(ticket_id="20260407001"),
     )
 
-    assert result == "ticket detail"
+    first = asyncio.run(runner._handle_pending_meridian_flow(_make_event("fatih"), "agent:main:telegram:dm:c1:u1"))
+    second = asyncio.run(runner._handle_pending_meridian_flow(_make_event("please check map toolbar"), "agent:main:telegram:dm:c1:u1"))
+
+    assert "mesajı yaz" in first
+    assert "20260407001" in second
