@@ -70,6 +70,53 @@ def test_meridian_status_command_returns_role_summary(monkeypatch):
     assert result == "Meridian role summary"
 
 
+def test_meridian_watch_command_starts_watcher(monkeypatch):
+    runner = _make_runner()
+    runner._background_tasks = set()
+    called = {}
+
+    async def _fake_start(source, role):
+        called["role"] = role
+        return f"watching {role}"
+
+    runner._start_meridian_watch = _fake_start
+
+    result = asyncio.run(runner._handle_meridian_command(_make_event("/meridian watch fatih")))
+
+    assert result == "watching fatih"
+    assert called["role"] == "fatih"
+
+
+def test_meridian_unwatch_all_command_stops_watchers(monkeypatch):
+    runner = _make_runner()
+    runner._background_tasks = set()
+    called = {}
+
+    async def _fake_stop(source, role):
+        called["role"] = role
+        return f"stopped {role}"
+
+    runner._stop_meridian_watch = _fake_stop
+
+    result = asyncio.run(runner._handle_meridian_command(_make_event("/meridian unwatch all")))
+
+    assert result == "stopped all"
+    assert called["role"] == "all"
+
+
+def test_meridian_watch_status_reports_active_roles():
+    runner = _make_runner()
+    runner._meridian_log_watchers = {
+        "telegram:c1:fatih": object(),
+        "telegram:c1:matthew": object(),
+    }
+
+    result = asyncio.run(runner._handle_meridian_command(_make_event("/meridian watch status")))
+
+    assert "fatih" in result
+    assert "matthew" in result
+
+
 def test_meridian_ticket_new_creates_ticket(monkeypatch):
     runner = _make_runner()
     fake_ticket = SimpleNamespace(ticket_id="20260407001")

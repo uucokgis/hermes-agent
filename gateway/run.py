@@ -3259,6 +3259,18 @@ class GatewayRunner:
         subcommand = parts[0].lower()
         sender = event.source.user_name or event.source.user_id or "telegram-user"
 
+        if subcommand in {"watch", "unwatch"}:
+            role = parts[1].lower() if len(parts) > 1 else ""
+            if subcommand == "watch" and role == "status":
+                return self._meridian_watch_status(event.source)
+            if subcommand == "unwatch" and role == "all":
+                return await self._stop_meridian_watch(event.source, "all")
+            if role not in {"philip", "fatih", "matthew"}:
+                return "Usage: `/meridian watch <philip|fatih|matthew|status>` or `/meridian unwatch <philip|fatih|matthew|all>`"
+            if subcommand == "watch":
+                return await self._start_meridian_watch(event.source, role)
+            return await self._stop_meridian_watch(event.source, role)
+
         if subcommand == "tickets":
             tickets = list_support_tickets(limit=8)
             if not tickets:
@@ -3275,7 +3287,7 @@ class GatewayRunner:
             return "\n".join(lines)
 
         if subcommand != "ticket":
-            return "Usage: `/meridian [status|tickets|ticket ...]`"
+            return "Usage: `/meridian [status|tickets|ticket|watch|unwatch ...]`"
 
         remainder = parts[1:]
         if not remainder:
@@ -3326,6 +3338,106 @@ class GatewayRunner:
             f"Target role: `{target_role}`\n"
             f"Status: `{updated.metadata.get('status', '')}`"
         )
+
+    def _meridian_watch_key(self, source: "SessionSource", role: str) -> str:
+        thread = f":{source.thread_id}" if source.thread_id else ""
+        return f"{source.platform.value}:{source.chat_id}{thread}:{role}"
+
+    def _meridian_watch_status(self, source: "SessionSource") -> str:
+        watchers = getattr(self, "_meridian_log_watchers", {})
+        prefix = self._meridian_watch_key(source, "")
+        active = sorted(key.split(":")[-1] for key in watchers if key.startswith(prefix))
+        if not active:
+            return "👀 No Meridian watchers active for this chat."
+        return "👀 Active Meridian watchers: " + ", ".join(f"`{role}`" for role in active)
+
+    async def _start_meridian_watch(self, source: "SessionSource", role: str) -> str:
+        watchers = getattr(self, "_meridian_log_watchers", None)
+        if watchers is None:
+            watchers = {}
+            self._meridian_log_watchers = watchers
+
+        key = self._meridian_watch_key(source, role)
+        task = watchers.get(key)
+        if task and not task.done():
+            return f"👀 Already watching `{role}`."
+
+        loop_task = asyncio.create_task(self._run_meridian_watch(source, role))
+        watchers[key] = loop_task
+        self._background_tasks.add(loop_task)
+        loop_task.add_done_callback(self._background_tasks.discard)
+
+        def _cleanup(done_task, *, watch_key=key):
+            current = getattr(self, "_meridian_log_watchers", {})
+            if current.get(watch_key) is done_task:
+                current.pop(watch_key, None)
+
+        loop_task.add_done_callback(_cleanup)
+        return f"👀 Watching `{role}` log in this chat. Use `/meridian unwatch {role}` to stop."
+
+    async def _stop_meridian_watch(self, source: "SessionSource", role: str) -> str:
+        watchers = getattr(self, "_meridian_log_watchers", {})
+        roles = ("philip", "fatih", "matthew") if role == "all" else (role,)
+        stopped: list[str] = []
+        for item in roles:
+            key = self._meridian_watch_key(source, item)
+            task = watchers.pop(key, None)
+            if task and not task.done():
+                task.cancel()
+                stopped.append(item)
+        if not stopped:
+            return "👀 No matching Meridian watcher was running."
+        return "👀 Stopped Meridian watcher(s): " + ", ".join(f"`{item}`" for item in stopped)
+
+    def _filter_meridian_watch_lines(self, raw: str) -> list[str]:
+        lines: list[str] = []
+        for entry in raw.splitlines():
+            line = entry.strip(" \t│╭╰─")
+            if not line:
+                continue
+            if line.startswith(("===", "┊", "$", "Hermes", "Profile exists:", "Started ", "Stopped ")):
+                continue
+            if "preparing " in line:
+                continue
+            lines.append(line)
+        return lines
+
+    async def _run_meridian_watch(self, source: "SessionSource", role: str) -> None:
+        adapter = self.adapters.get(source.platform)
+        if not adapter:
+            return
+
+        from pathlib import Path
+
+        log_path = Path.home() / ".hermes" / "meridian" / "loops" / f"{role}.loop.log"
+        metadata = {"thread_id": source.thread_id} if source.thread_id else None
+        position = log_path.stat().st_size if log_path.exists() else 0
+
+        try:
+            while True:
+                await asyncio.sleep(4)
+                if not log_path.exists():
+                    continue
+                size = log_path.stat().st_size
+                if size < position:
+                    position = 0
+                if size == position:
+                    continue
+                with log_path.open("r", encoding="utf-8", errors="ignore") as handle:
+                    handle.seek(position)
+                    chunk = handle.read()
+                    position = handle.tell()
+                lines = self._filter_meridian_watch_lines(chunk)
+                if not lines:
+                    continue
+                excerpt = "\n".join(f"- {line}" for line in lines[-8:])
+                await adapter.send(
+                    chat_id=source.chat_id,
+                    content=f"👀 `{role}` update\n{excerpt}",
+                    metadata=metadata,
+                )
+        except asyncio.CancelledError:
+            raise
     
     async def _handle_provider_command(self, event: MessageEvent) -> str:
         """Handle /provider command - show available providers."""
