@@ -1195,13 +1195,26 @@ def meridian_command(args) -> int:
     subcommand = getattr(args, "meridian_command", None) or "status"
 
     if subcommand == "go":
-        return run_meridian_go_loop(
-            workspace,
-            sleep_seconds=float(getattr(args, "sleep", 15.0)),
-            idle_sleep_seconds=float(getattr(args, "idle_sleep", 60.0)),
-            max_passes=getattr(args, "max_passes", None),
-            once=bool(getattr(args, "once", False)),
-        )
+        try:
+            return run_meridian_go_loop(
+                workspace,
+                sleep_seconds=float(getattr(args, "sleep", 15.0)),
+                idle_sleep_seconds=float(getattr(args, "idle_sleep", 60.0)),
+                max_passes=getattr(args, "max_passes", None),
+                once=bool(getattr(args, "once", False)),
+            )
+        except FileNotFoundError as exc:
+            print(str(exc))
+            ssh_host, remote_cwd = _terminal_remote_hint()
+            if ssh_host:
+                print(
+                    "Hint: in the 106/107 split topology, use the long-running role loops instead of `hermes meridian go`."
+                )
+                print(
+                    "Run `scripts/meridian-multi-agent.sh start` on the Hermes machine, "
+                    f"with HERMES_MERIDIAN_WORKSPACE pointing to {remote_cwd or '/home/umut/meridian'}."
+                )
+            return 1
 
     if subcommand == "dispatch":
         snapshot = dispatch_meridian(workspace)

@@ -806,6 +806,38 @@ def test_meridian_command_go_once_runs_single_pass(tmp_path, monkeypatch, capsys
     assert "wake fatih for TASK-1" in out
 
 
+def test_meridian_command_go_prints_remote_hint_when_workspace_is_not_local(monkeypatch, capsys):
+    from hermes_cli import meridian_dispatcher as md
+
+    monkeypatch.setattr(
+        md,
+        "run_meridian_go_loop",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            FileNotFoundError(
+                "Meridian workspace does not exist on this machine: /home/umut/meridian. "
+                "Remote terminal backend points to 192.168.1.107:/home/umut/meridian."
+            )
+        ),
+    )
+    monkeypatch.setattr(md, "_terminal_remote_hint", lambda: ("192.168.1.107", "/home/umut/meridian"))
+
+    rc = md.meridian_command(
+        Namespace(
+            meridian_command="go",
+            workspace="/home/umut/meridian",
+            sleep=15.0,
+            idle_sleep=60.0,
+            max_passes=None,
+            once=False,
+        )
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "use the long-running role loops" in out
+    assert "scripts/meridian-multi-agent.sh start" in out
+
+
 def test_meridian_command_history_prints_workflow_history(tmp_path, monkeypatch, capsys):
     from hermes_cli import meridian_dispatcher as md
     from hermes_cli.meridian_workflow import claim_task, transition_task
