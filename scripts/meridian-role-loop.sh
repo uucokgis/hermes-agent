@@ -11,6 +11,15 @@ SERIALIZE_MODEL_ACCESS="${HERMES_MERIDIAN_SERIALIZE_MODEL_ACCESS:-1}"
 PASS_TIMEOUT_SECONDS="${HERMES_MERIDIAN_PASS_TIMEOUT_SECONDS:-900}"
 MODEL_LOCK_FILE="${HERMES_MERIDIAN_MODEL_LOCK_FILE:-$HOME/.hermes/meridian/loops/model-provider.lock}"
 STARTUP_JITTER_SECONDS="${HERMES_MERIDIAN_STARTUP_JITTER_SECONDS:-15}"
+REVIEW_PRIORITY_THRESHOLD="${HERMES_MERIDIAN_REVIEW_PRIORITY_THRESHOLD:-2}"
+REVIEW_PRIORITY_DURATION_SECONDS="${HERMES_MERIDIAN_REVIEW_PRIORITY_DURATION_SECONDS:-7200}"
+REVIEW_PRIORITY_STATE_FILE="${HERMES_MERIDIAN_REVIEW_PRIORITY_STATE_FILE:-$HOME/.hermes/meridian/review-priority-until.txt}"
+REVIEW_PRIORITY_MATTHEW_SLEEP="${HERMES_MERIDIAN_REVIEW_PRIORITY_MATTHEW_SLEEP:-60}"
+REVIEW_PRIORITY_FATIH_SLEEP="${HERMES_MERIDIAN_REVIEW_PRIORITY_FATIH_SLEEP:-900}"
+REVIEW_PRIORITY_PHILIP_SLEEP="${HERMES_MERIDIAN_REVIEW_PRIORITY_PHILIP_SLEEP:-1800}"
+REVIEW_PRIORITY_MATTHEW_MAX_TURNS="${HERMES_MERIDIAN_REVIEW_PRIORITY_MATTHEW_MAX_TURNS:-20}"
+REVIEW_PRIORITY_FATIH_MAX_TURNS="${HERMES_MERIDIAN_REVIEW_PRIORITY_FATIH_MAX_TURNS:-8}"
+REVIEW_PRIORITY_PHILIP_MAX_TURNS="${HERMES_MERIDIAN_REVIEW_PRIORITY_PHILIP_MAX_TURNS:-4}"
 
 if [[ -z "$ROLE" ]]; then
   echo "Usage: $0 <philip|fatih|matthew> [workspace] [sleep_seconds] [profile]" >&2
@@ -312,6 +321,128 @@ role_max_turns() {
   role_default_max_turns "$1"
 }
 
+role_priority_max_turns() {
+  case "$1" in
+    philip) echo "$REVIEW_PRIORITY_PHILIP_MAX_TURNS" ;;
+    fatih) echo "$REVIEW_PRIORITY_FATIH_MAX_TURNS" ;;
+    matthew) echo "$REVIEW_PRIORITY_MATTHEW_MAX_TURNS" ;;
+    *)
+      echo "Unknown role: $1" >&2
+      exit 1
+      ;;
+  esac
+}
+
+role_sleep_seconds_for_current_mode() {
+  local role="$1"
+  local in_priority="$2"
+  if [[ "$in_priority" != "1" ]]; then
+    echo "$SLEEP_SECONDS"
+    return
+  fi
+  case "$role" in
+    philip) echo "$REVIEW_PRIORITY_PHILIP_SLEEP" ;;
+    fatih) echo "$REVIEW_PRIORITY_FATIH_SLEEP" ;;
+    matthew) echo "$REVIEW_PRIORITY_MATTHEW_SLEEP" ;;
+    *)
+      echo "Unknown role: $1" >&2
+      exit 1
+      ;;
+  esac
+}
+
+remote_exec() {
+  if [[ -d "$WORKSPACE/tasks" ]]; then
+    bash -lc "cd \"$WORKSPACE\" && $*"
+    return $?
+  fi
+
+  local host="${HERMES_MERIDIAN_QUALITY_SSH_HOST:-${TERMINAL_SSH_HOST:-}}"
+  local user="${HERMES_MERIDIAN_QUALITY_SSH_USER:-${TERMINAL_SSH_USER:-}}"
+  local key="${HERMES_MERIDIAN_QUALITY_SSH_KEY:-${TERMINAL_SSH_KEY:-}}"
+  local password="${HERMES_MERIDIAN_QUALITY_SSH_PASSWORD:-${TERMINAL_SSH_PASSWORD:-}}"
+
+  if [[ -z "$host" || -z "$user" ]]; then
+    echo "remote_exec requires TERMINAL_SSH_HOST/USER or HERMES_MERIDIAN_QUALITY_SSH_HOST/USER" >&2
+    return 1
+  fi
+
+  local ssh_cmd=(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=8)
+  if [[ -n "$password" ]]; then
+    sshpass -p "$password" "${ssh_cmd[@]}" \
+      -o PreferredAuthentications=password \
+      -o PubkeyAuthentication=no \
+      "$user@$host" "cd '$WORKSPACE' && $*"
+    return $?
+  fi
+  if [[ -n "$key" ]]; then
+    ssh_cmd+=(-i "$key")
+  fi
+  "${ssh_cmd[@]}" "$user@$host" "cd '$WORKSPACE' && $*"
+}
+
+review_active_count() {
+  remote_exec "find tasks/review/active -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l" 2>/dev/null | tr -dc '0-9'
+}
+
+review_request_changes_count() {
+  remote_exec "grep -RIl '^review_outcome: request_changes' tasks/review/decisions 2>/dev/null | wc -l" 2>/dev/null | tr -dc '0-9'
+}
+
+review_priority_until_epoch() {
+  if [[ ! -f "$REVIEW_PRIORITY_STATE_FILE" ]]; then
+    echo 0
+    return
+  fi
+  tr -dc '0-9' < "$REVIEW_PRIORITY_STATE_FILE"
+}
+
+set_review_priority_until_epoch() {
+  local epoch="$1"
+  mkdir -p "$(dirname "$REVIEW_PRIORITY_STATE_FILE")"
+  printf '%s\n' "$epoch" > "$REVIEW_PRIORITY_STATE_FILE"
+}
+
+refresh_review_priority_window() {
+  local now active_count until
+  now="$(date +%s)"
+  active_count="$(review_active_count)"
+  active_count="${active_count:-0}"
+  until="$(review_priority_until_epoch)"
+  until="${until:-0}"
+
+  if [[ "$active_count" =~ ^[0-9]+$ ]] && (( active_count >= REVIEW_PRIORITY_THRESHOLD )); then
+    until=$(( now + REVIEW_PRIORITY_DURATION_SECONDS ))
+    set_review_priority_until_epoch "$until"
+  fi
+
+  if (( until > now )); then
+    echo 1
+  else
+    echo 0
+  fi
+}
+
+should_run_pass_in_priority_window() {
+  local role="$1"
+  if [[ "$role" == "matthew" ]]; then
+    echo 1
+    return
+  fi
+  if [[ "$role" == "fatih" ]]; then
+    local request_changes
+    request_changes="$(review_request_changes_count)"
+    request_changes="${request_changes:-0}"
+    if [[ "$request_changes" =~ ^[0-9]+$ ]] && (( request_changes > 0 )); then
+      echo 1
+    else
+      echo 0
+    fi
+    return
+  fi
+  echo 0
+}
+
 run_with_timeout() {
   local timeout_seconds="$1"
   shift
@@ -323,8 +454,13 @@ run_with_timeout() {
 }
 
 run_serialized_chat_pass() {
-  local max_turns
-  max_turns="$(role_max_turns "$ROLE")"
+  local max_turns in_priority
+  in_priority="$1"
+  if [[ "$in_priority" == "1" ]]; then
+    max_turns="$(role_priority_max_turns "$ROLE")"
+  else
+    max_turns="$(role_max_turns "$ROLE")"
+  fi
 
   if [[ "$SERIALIZE_MODEL_ACCESS" == "1" ]] && command -v flock >/dev/null 2>&1; then
     mkdir -p "$(dirname "$MODEL_LOCK_FILE")"
@@ -351,10 +487,23 @@ if [[ "$STARTUP_JITTER_SECONDS" =~ ^[0-9]+$ ]] && (( STARTUP_JITTER_SECONDS > 0 
 fi
 
 while true; do
+  IN_PRIORITY_WINDOW="$(refresh_review_priority_window)"
+  CURRENT_SLEEP_SECONDS="$(role_sleep_seconds_for_current_mode "$ROLE" "$IN_PRIORITY_WINDOW")"
   echo "=== $(date -Is) [$ROLE] profile=$PROFILE workspace=$WORKSPACE ==="
+  if [[ "$IN_PRIORITY_WINDOW" == "1" ]]; then
+    echo "[$ROLE] review priority window active"
+  fi
   if [[ "$ROLE" == "matthew" ]]; then
     "$HERMES_BIN" -p "$PROFILE" meridian quality --run --workspace "$WORKSPACE" || true
   fi
-  run_serialized_chat_pass || true
-  sleep "$SLEEP_SECONDS"
+  if [[ "$IN_PRIORITY_WINDOW" == "1" ]]; then
+    if [[ "$(should_run_pass_in_priority_window "$ROLE")" == "1" ]]; then
+      run_serialized_chat_pass 1 || true
+    else
+      echo "[$ROLE] skipping pass during Matthew priority window"
+    fi
+  else
+    run_serialized_chat_pass 0 || true
+  fi
+  sleep "$CURRENT_SLEEP_SECONDS"
 done
