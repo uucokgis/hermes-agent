@@ -317,6 +317,83 @@ def _available_lanes(executor: Executor) -> list[dict[str, str]]:
     return available
 
 
+def _normalize_path_list(value: Any) -> list[str]:
+    if value in (None, "", []):
+        return []
+    if isinstance(value, list):
+        items = value
+    else:
+        items = [value]
+    normalized: list[str] = []
+    for item in items:
+        text = str(item).strip().replace("\\", "/").lstrip("./")
+        if not text:
+            continue
+        normalized.append(text)
+    return normalized
+
+
+def _task_scope_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    linked_files = _normalize_path_list(metadata.get("linked_files"))
+    linked_dirs = _normalize_path_list(metadata.get("linked_dirs"))
+    scope_entries = linked_files + linked_dirs
+    if not scope_entries:
+        return {"mode": "full", "reason": "no_scope_metadata", "paths": []}
+
+    backend_hit = False
+    frontend_hit = False
+    non_code_hit = False
+    for entry in scope_entries:
+        if entry.startswith("backend/"):
+            backend_hit = True
+            continue
+        if entry.startswith("frontend/"):
+            frontend_hit = True
+            continue
+        non_code_hit = True
+
+    if backend_hit or frontend_hit:
+        categories: list[str] = []
+        if backend_hit:
+            categories.append("backend")
+        if frontend_hit:
+            categories.append("frontend")
+        return {
+            "mode": "scoped",
+            "reason": "linked_paths",
+            "paths": scope_entries,
+            "categories": categories,
+        }
+
+    if non_code_hit:
+        return {
+            "mode": "docs_only",
+            "reason": "linked_paths_non_code_only",
+            "paths": scope_entries,
+            "categories": [],
+        }
+
+    return {"mode": "full", "reason": "unclassified_scope", "paths": scope_entries}
+
+
+def _filter_lanes_for_scope(available_lanes: list[dict[str, str]], scope: dict[str, Any]) -> list[dict[str, str]]:
+    mode = scope.get("mode")
+    if mode == "full":
+        return [dict(lane) for lane in available_lanes]
+    if mode == "docs_only":
+        return []
+    categories = set(scope.get("categories") or [])
+    selected: list[dict[str, str]] = []
+    for lane in available_lanes:
+        name = str(lane.get("name") or "")
+        if "backend" in categories and name.startswith("backend-"):
+            selected.append(dict(lane))
+            continue
+        if "frontend" in categories and name.startswith("frontend-"):
+            selected.append(dict(lane))
+    return selected
+
+
 def _trim_output(text: str, *, max_lines: int = 80, max_chars: int = 5000) -> str:
     normalized = (text or "").strip()
     if not normalized:
@@ -328,6 +405,75 @@ def _trim_output(text: str, *, max_lines: int = 80, max_chars: int = 5000) -> st
     if len(clipped) > max_chars:
         clipped = clipped[: max_chars - 18].rstrip() + "\n... (truncated)"
     return clipped
+
+
+def _locate_task_metadata_local(executor: Executor, task_id: str) -> dict[str, Any]:
+    tasks_root = Path(executor.workspace) / "tasks"
+    if not tasks_root.exists():
+        return {}
+    for path in tasks_root.rglob("*.md"):
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        try:
+            metadata = _parse_task_frontmatter(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        candidate_id = str(metadata.get("id") or path.stem)
+        if candidate_id == task_id or path.name == task_id:
+            return metadata
+    return {}
+
+
+def _locate_task_metadata_ssh(executor: Executor, task_id: str) -> dict[str, Any]:
+    script = """
+import json
+from pathlib import Path
+import yaml
+
+workspace = Path(__WORKSPACE__).expanduser()
+task_id = __TASK_ID__
+tasks_root = workspace / "tasks"
+result = {}
+if tasks_root.exists():
+    for path in sorted(tasks_root.rglob("*.md")):
+        if not path.is_file() or path.name.startswith('.'):
+            continue
+        try:
+            content = path.read_text(encoding='utf-8')
+        except OSError:
+            continue
+        metadata = {}
+        if content.startswith('---\\n'):
+            closing = content.find('\\n---\\n', 4)
+            if closing != -1:
+                loaded = yaml.safe_load(content[4:closing]) or {}
+                if isinstance(loaded, dict):
+                    metadata = loaded
+        candidate_id = str(metadata.get('id') or path.stem)
+        if candidate_id == task_id or path.name == task_id:
+            result = metadata
+            break
+print(json.dumps(result, ensure_ascii=False))
+""".replace("__WORKSPACE__", repr(executor.workspace)).replace("__TASK_ID__", repr(task_id))
+    result = _run_command(
+        executor,
+        f"python3 - <<'PY'\n{script}\nPY",
+        cwd=executor.workspace,
+        timeout=45,
+    )
+    if result.returncode != 0:
+        return {}
+    try:
+        payload = json.loads(result.stdout.strip() or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _task_metadata_for_scope(executor: Executor, task_id: str) -> dict[str, Any]:
+    if executor.mode == "ssh":
+        return _locate_task_metadata_ssh(executor, task_id)
+    return _locate_task_metadata_local(executor, task_id)
 
 
 def _summarize_lanes(lanes: list[dict[str, Any]]) -> dict[str, int]:
@@ -681,6 +827,14 @@ def _render_report(result: dict[str, Any]) -> str:
         f"- summary: {result.get('summary', '')}",
         f"- normalized_summary: {result.get('normalized_summary', '')}",
     ]
+    scope = result.get("scope") or {}
+    if scope:
+        lines.append(f"- scope_mode: `{scope.get('mode', '')}`")
+        lines.append(f"- scope_reason: `{scope.get('reason', '')}`")
+        if scope.get("paths"):
+            lines.append(f"- scoped_paths: `{', '.join(scope.get('paths') or [])}`")
+        if scope.get("selected_lanes"):
+            lines.append(f"- selected_lanes: `{', '.join(scope.get('selected_lanes') or [])}`")
     if result.get("trigger_event_id"):
         lines.append(f"- trigger_event_id: `{result['trigger_event_id']}`")
     if result.get("triggered_by"):
@@ -752,8 +906,16 @@ def _scan_task(
     trigger_event: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
+    metadata = _task_metadata_for_scope(executor, task_id)
+    scope = _task_scope_from_metadata(metadata)
+    available_lanes = _available_lanes(executor)
+    selected_lanes = _filter_lanes_for_scope(available_lanes, scope)
+    scope = {
+        **scope,
+        "selected_lanes": [str(lane.get("name") or "") for lane in selected_lanes],
+    }
     lanes: list[dict[str, Any]] = []
-    for lane in _available_lanes(executor):
+    for lane in selected_lanes:
         lane_started = time.monotonic()
         cwd = str(Path(executor.workspace) / lane["cwd"]) if executor.mode == "local" else str(Path(executor.workspace) / lane["cwd"])
         completed = _run_command(executor, lane["command"], cwd=cwd)
@@ -774,14 +936,18 @@ def _scan_task(
     if not lanes:
         lanes.append(
             {
-                "name": "no-op",
+                "name": "scope-no-op" if scope.get("mode") == "docs_only" else "no-op",
                 "kind": "quality",
                 "command": "",
                 "cwd": executor.workspace,
                 "status": "skipped",
                 "exit_code": 0,
                 "duration_seconds": 0.0,
-                "output": "No supported backend/frontend quality lanes were detected in this workspace.",
+                "output": (
+                    "Only non-code linked_paths were provided; skipping backend/frontend quality lanes."
+                    if scope.get("mode") == "docs_only"
+                    else "No supported backend/frontend quality lanes were detected in this workspace."
+                ),
             }
         )
 
@@ -803,6 +969,7 @@ def _scan_task(
         "normalized_summary": _normalized_summary(findings),
         "findings": findings,
         "lanes": lanes,
+        "scope": scope,
     }
     result["report_path"] = _write_report(result)
     return result
