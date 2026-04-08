@@ -203,7 +203,11 @@ def test_dispatch_auto_applies_review_approval_when_no_open_actions(tmp_path, mo
     state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
     monkeypatch.setattr(md, "STATE_PATH", state_path)
 
-    _write_task(workspace / "tasks" / "review" / "task-1.md", "TASK-1")
+    _write_task(
+        workspace / "tasks" / "review" / "task-1.md",
+        "TASK-1",
+        metadata={"pushed": True},
+    )
     _write_review_decision(
         workspace / "tasks" / "review" / "decisions" / "TASK-1-decision.md",
         review_task_id="TASK-1",
@@ -217,6 +221,30 @@ def test_dispatch_auto_applies_review_approval_when_no_open_actions(tmp_path, mo
 
     assert snapshot["workflow_state"] == "idle"
     assert (workspace / "tasks" / "done" / "task-1.md").exists()
+
+
+def test_dispatch_blocks_auto_review_completion_when_task_not_pushed(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+
+    _write_task(workspace / "tasks" / "review" / "task-1.md", "TASK-1", metadata={"pushed": False})
+    _write_review_decision(
+        workspace / "tasks" / "review" / "decisions" / "TASK-1-decision.md",
+        review_task_id="TASK-1",
+        review_outcome="approved",
+        decision_bucket="passed",
+        required_actions=[],
+        transition_recommendation={"from_queue": "review", "to_queue": "done"},
+    )
+
+    snapshot = md.dispatch_meridian(workspace)
+
+    assert snapshot["workflow_state"] == "review"
+    assert snapshot["auto_review_transition"]["status"] == "validation_error"
+    assert "pushed=true" in snapshot["auto_review_transition"]["error"]
 
 
 def test_dispatch_does_not_auto_apply_done_transition_with_open_actions(tmp_path, monkeypatch):
@@ -936,12 +964,17 @@ def test_meridian_command_review_transition_apply_moves_task(tmp_path, monkeypat
     from hermes_cli import meridian_dispatcher as md
 
     workspace = _make_workspace(tmp_path)
-    _write_task(workspace / "tasks" / "review" / "task-1.md", "TASK-1")
+    _write_task(
+        workspace / "tasks" / "review" / "task-1.md",
+        "TASK-1",
+        metadata={"pushed": True},
+    )
     _write_review_decision(
         workspace / "tasks" / "review" / "decisions" / "TASK-1-decision.md",
         review_task_id="TASK-1",
         review_outcome="approved",
         decision_bucket="passed",
+        required_actions=[],
         transition_recommendation={"from_queue": "review", "to_queue": "done"},
     )
 

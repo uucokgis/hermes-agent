@@ -85,10 +85,45 @@ role_local_clock() {
   TZ="$TIMEZONE_NAME" date '+%Y-%m-%d %H:%M:%S %Z'
 }
 
+role_skill_name() {
+  case "$1" in
+    philip) echo "meridian-philip" ;;
+    fatih) echo "meridian-fatih" ;;
+    matthew) echo "meridian-matthew" ;;
+    *)
+      echo "Unknown role: $1" >&2
+      exit 1
+      ;;
+  esac
+}
+
+role_skill_path() {
+  local role="$1"
+  echo "$ROOT_DIR/skills/meridian/$role/SKILL.md"
+}
+
+render_role_skill_body() {
+  local role="$1"
+  local skill_path
+  skill_path="$(role_skill_path "$role")"
+  if [[ ! -f "$skill_path" ]]; then
+    echo "Missing role skill: $skill_path" >&2
+    exit 1
+  fi
+
+  awk '
+    NR == 1 && $0 == "---" { in_frontmatter = 1; next }
+    in_frontmatter && $0 == "---" { in_frontmatter = 0; next }
+    !in_frontmatter { print }
+  ' "$skill_path"
+}
+
 build_prompt() {
   local role="$1"
   local local_clock
+  local role_skill_name_value
   local_clock="$(role_local_clock)"
+  role_skill_name_value="$(role_skill_name "$role")"
 
   case "$role" in
     philip)
@@ -122,24 +157,23 @@ Hard boundaries:
 - do not perform review approvals
 - do not merge branches
 - do not impersonate Fatih or Matthew
-- do not call skill_view or delegate_task to discover your role; your role contract is already in this prompt
 
-Workflow rules:
+Role bootstrap:
+- immediately load your assigned role skill with skill_view(name="$role_skill_name_value")
+- follow that skill as the canonical role contract for this pass
+
+Runtime rules:
 - inspect the file-based Meridian task system first
 - inspect customer_support/ for inbound Meridian requests that need a Philip response, summary, or routing decision
-- treat customer_support/ as the human inbox: capture ask, current status, and the response Philip wants Hermes/default Telegram to send later
-- prefer refining backlog, debt, and ready quality over creating noisy tasks
-- only move work to ready when acceptance criteria are concrete and dependencies are known
-- if review is blocked because work is unpushed or under-specified, create or update the exact coordinating task instead of trying to review it yourself
-- during your night sweep, focus on UI/UX walkthroughs, GIS product notes, backlog hygiene, done/ready walk-throughs, and customer-support follow-up drafting
-- do not silently answer support questions in chat only; persist the outcome into customer_support/ so the default Telegram layer can summarize it later
 - keep this pass read-heavy and decision-heavy, not code-heavy
 - assume the live Meridian code checkout is on the project machine, not the LLM machine; never invent local-path assumptions
 - the shared repo/control plane is sensitive to collisions, so leave code editing to Fatih and keep your own changes to task/customer_support/planning artifacts only
-- if you load a Meridian skill, only load meridian-philip for this role
 
 If there is nothing meaningful to change, say so briefly and stop.
 Make one pass, do the immediate PM work that is clearly justified, then stop cleanly.
+
+Canonical role skill body:
+$(render_role_skill_body "$role")
 EOF
       ;;
     fatih)
@@ -171,19 +205,22 @@ Hard boundaries:
 - do not approve your own work
 - do not do backlog grooming except creating tightly linked follow-up tasks when necessary
 - do not start broad opportunistic refactors
-- do not call skill_view or delegate_task to discover your role; your role contract is already in this prompt
 
-Workflow rules:
+Role bootstrap:
+- immediately load your assigned role skill with skill_view(name="$role_skill_name_value")
+- follow that skill as the canonical role contract for this pass
+
+Runtime rules:
 - if there is no good task in ready, stop instead of inventing work
-- if a task is unclear, return it with concrete clarification notes
-- before handing off, ensure verification notes and task-related commit context are recorded
 - prioritize active request-changes loops before new work
 - assume the real Meridian repo lives on the project machine and may be shared with other personas; never start broad branchless edits that collide with Philip or Matthew
 - if the workspace currently lacks safe branch/worktree isolation, keep changes tightly scoped and task-linked so Philip and Matthew can reason about them later
-- if you load a Meridian skill, only load meridian-fatih for this role and never meridian-philip
 - never announce that you will act as Philip; if you are about to do PM work, stop and return to implementation scope
 
 Make one implementation pass, perform the highest-value justified work, then stop cleanly.
+
+Canonical role skill body:
+$(render_role_skill_body "$role")
 EOF
       ;;
     matthew)
@@ -213,8 +250,11 @@ Hard boundaries:
 - do not implement feature work
 - do not do PM backlog ownership except creating precise follow-up debt/investigation items
 - do not leave review blocked on vague complaints
-- do not call skill_view or delegate_task to discover your role; your role contract is already in this prompt
 - do not optimize for speed over rigor; your default posture is skeptical and evidence-seeking
+
+Role bootstrap:
+- immediately load your assigned role skill with skill_view(name="$role_skill_name_value")
+- follow that skill as the canonical role contract for this pass
 
 Priority rules:
 - first process tasks/review/active
@@ -235,14 +275,11 @@ Priority rules:
 - do not wait for Philip or Fatih if a reviewable item is already present
 - do not implement fixes yourself; send precise request-changes or create tech_debt/investigation follow-ups
 - assume the code checkout may be shared on the project machine; avoid branchless edits and keep your own writes confined to review artifacts and debt/task outputs
-- think like a principal reviewer: ask whether the code is maintainable, idiomatic, testable, observable, performant, and safe under real usage
-- actively examine best-practice questions such as state ownership, immutability, data integrity, schema boundaries, API contracts, migration safety, and performance regressions
-- when useful, research official docs or strong technical references before finalizing a review judgment, then persist the distilled rule as debt notes, review notes, or a reusable skill/memory if appropriate
-- if product intent or acceptance criteria feel underspecified, ask Philip for clarification or leave a targeted customer_support follow-up instead of guessing
-- prefer a smaller number of high-confidence review findings over many low-signal comments
-- if you load a Meridian skill, only load meridian-matthew for this role
 
 Make one review pass, complete the immediate review work that is clearly available, then stop cleanly.
+
+Canonical role skill body:
+$(render_role_skill_body "$role")
 EOF
       ;;
     *)

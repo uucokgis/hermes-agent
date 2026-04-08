@@ -205,6 +205,75 @@ def test_transition_to_waiting_human_sets_blocking_metadata(tmp_path):
     assert document.metadata["blocked_reason"] == "migration approval required"
 
 
+def test_transition_in_progress_to_review_requires_review_handoff_metadata(tmp_path):
+    workspace = _make_workspace(tmp_path)
+    task_path = workspace / "tasks" / "in_progress" / "task-1.md"
+    _write_task(task_path, "TASK-1", metadata={"claimed_by": "fatih"})
+
+    with pytest.raises(MeridianWorkflowError, match="requires review handoff metadata"):
+        transition_task(
+            workspace,
+            task_id="TASK-1",
+            actor="fatih",
+            from_queue="in_progress",
+            to_queue="review",
+        )
+
+
+def test_transition_in_progress_to_review_accepts_commit_branch_and_verification_metadata(tmp_path):
+    workspace = _make_workspace(tmp_path)
+    task_path = workspace / "tasks" / "in_progress" / "task-1.md"
+    _write_task(
+        task_path,
+        "TASK-1",
+        metadata={
+            "claimed_by": "fatih",
+            "branch": "task/test-review-handoff",
+            "commit_sha": "abc1234",
+            "verification_status": "passed",
+            "verification_summary": "scripts/verify.sh passed",
+            "pushed": True,
+        },
+    )
+
+    result = transition_task(
+        workspace,
+        task_id="TASK-1",
+        actor="fatih",
+        from_queue="in_progress",
+        to_queue="review",
+    )
+
+    assert result["to_queue"] == "review"
+    document = locate_task(workspace, "TASK-1")
+    assert document.metadata["reviewer"] == "matthew"
+
+
+def test_transition_review_to_done_requires_pushed_metadata(tmp_path):
+    workspace = _make_workspace(tmp_path)
+    task_path = workspace / "tasks" / "review" / "task-1.md"
+    _write_task(
+        task_path,
+        "TASK-1",
+        metadata={
+            "branch": "task/test-review-done",
+            "commit_sha": "abc1234",
+            "verification_status": "passed",
+            "verification_summary": "scripts/verify.sh passed",
+            "pushed": False,
+        },
+    )
+
+    with pytest.raises(MeridianWorkflowError, match="review -> done requires pushed=true"):
+        transition_task(
+            workspace,
+            task_id="TASK-1",
+            actor="matthew",
+            from_queue="review",
+            to_queue="done",
+        )
+
+
 def test_locate_task_prefers_canonical_in_progress_over_legacy_alias(tmp_path):
     workspace = _make_workspace(tmp_path)
     legacy_dir = workspace / "tasks" / "in-progress"
@@ -246,6 +315,7 @@ def test_done_transition_clears_claim_metadata(tmp_path):
             "claimed_by": "fatih",
             "claimed_at": "2026-04-05T11:00:00+00:00",
             "claim_expires_at": "2026-04-05T12:00:00+00:00",
+            "pushed": True,
         },
     )
 
@@ -267,7 +337,17 @@ def test_done_transition_clears_claim_metadata(tmp_path):
 def test_transition_to_review_writes_to_active_review_queue(tmp_path):
     workspace = _make_workspace(tmp_path)
     task_path = workspace / "tasks" / "in_progress" / "task-1.md"
-    _write_task(task_path, "TASK-1", metadata={"claimed_by": "fatih"})
+    _write_task(
+        task_path,
+        "TASK-1",
+        metadata={
+            "claimed_by": "fatih",
+            "branch": "task/review-active",
+            "commit_sha": "abc1234",
+            "verification_status": "passed",
+            "verification_summary": "scripts/verify.sh passed",
+        },
+    )
 
     result = transition_task(
         workspace,

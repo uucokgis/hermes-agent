@@ -205,6 +205,59 @@ def _normalize_actor(actor: str) -> str:
     return normalized
 
 
+def _normalize_boolish(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return None
+
+
+def _verification_passed(metadata: dict[str, Any]) -> bool:
+    status = str(metadata.get("verification_status") or "").strip().lower()
+    if status in {"passed", "pass", "ok", "green"}:
+        return True
+    if _normalize_boolish(metadata.get("verification_passed")) is True:
+        return True
+    return False
+
+
+def _require_review_handoff_metadata(document: "TaskDocument") -> None:
+    metadata = document.metadata
+    branch = str(metadata.get("pr_branch") or metadata.get("branch") or "").strip()
+    commit_sha = str(metadata.get("commit_sha") or metadata.get("commit") or "").strip()
+    verification_summary = str(metadata.get("verification_summary") or metadata.get("verification") or "").strip()
+
+    missing: list[str] = []
+    if not branch:
+        missing.append("branch/pr_branch")
+    if not commit_sha:
+        missing.append("commit_sha")
+    if not _verification_passed(metadata):
+        missing.append("verification_status=passed")
+    if not verification_summary:
+        missing.append("verification_summary")
+
+    if missing:
+        raise MeridianWorkflowError(
+            "in_progress -> review requires review handoff metadata: "
+            + ", ".join(missing)
+        )
+
+
+def _require_review_completion_metadata(document: "TaskDocument") -> None:
+    pushed = _normalize_boolish(document.metadata.get("pushed"))
+    if pushed is not True:
+        raise MeridianWorkflowError("review -> done requires pushed=true")
+
+
 @dataclass
 class TaskDocument:
     queue: str
@@ -465,10 +518,14 @@ def _validate_transition(
             )
         _validate_actor_for_queue(actor, "ready", action="transition")
     elif document.queue == "review":
+        if to_queue == "done":
+            _require_review_completion_metadata(document)
         _validate_actor_for_queue(actor, "review", action="transition")
     elif document.queue == "waiting_human":
         _validate_actor_for_queue(actor, "waiting_human", action="transition")
     elif document.queue in {"backlog", "debt", "in_progress"}:
+        if (document.queue, to_queue) == ("in_progress", "review"):
+            _require_review_handoff_metadata(document)
         _validate_actor_for_queue(actor, document.queue, action="transition")
 
 

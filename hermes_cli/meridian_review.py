@@ -10,7 +10,7 @@ from typing import Any
 import yaml
 
 from hermes_cli.meridian_runtime import parse_iso_datetime
-from hermes_cli.meridian_workflow import locate_task, transition_task
+from hermes_cli.meridian_workflow import MeridianWorkflowError, locate_task, transition_task
 
 
 REVIEW_SCHEMA_VERSION = 1
@@ -302,15 +302,24 @@ def apply_recommended_transition(
             "applied": False,
             "current_queue": document.queue,
         }
-    result = transition_task(
-        workspace,
-        task_id=task_id,
-        actor=str(recommendation["actor"]),
-        from_queue=str(expected_from_queue),
-        to_queue=str(recommendation["to_queue"]),
-        reason=str(recommendation.get("summary") or f"review outcome: {recommendation.get('outcome')}"),
-        notes=f"Applied structured review decision {recommendation.get('review_id')}",
-    )
+    try:
+        result = transition_task(
+            workspace,
+            task_id=task_id,
+            actor=str(recommendation["actor"]),
+            from_queue=str(expected_from_queue),
+            to_queue=str(recommendation["to_queue"]),
+            reason=str(recommendation.get("summary") or f"review outcome: {recommendation.get('outcome')}"),
+            notes=f"Applied structured review decision {recommendation.get('review_id')}",
+        )
+    except MeridianWorkflowError as exc:
+        return {
+            **recommendation,
+            "status": "validation_error",
+            "applied": False,
+            "current_queue": document.queue,
+            "error": str(exc),
+        }
     return {
         **recommendation,
         "status": "applied",
