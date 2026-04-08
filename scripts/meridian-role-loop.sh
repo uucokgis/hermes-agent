@@ -34,6 +34,31 @@ if [[ ! -x "$HERMES_BIN" ]]; then
   exit 1
 fi
 
+load_optional_env_file() {
+  local env_file="$1"
+  if [[ -f "$env_file" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$env_file"
+    set +a
+  fi
+}
+
+expand_path() {
+  local raw="$1"
+  if [[ "$raw" == "~" ]]; then
+    printf '%s\n' "$HOME"
+    return
+  fi
+  if [[ "$raw" == "~/"* ]]; then
+    printf '%s/%s\n' "$HOME" "${raw#~/}"
+    return
+  fi
+  printf '%s\n' "$raw"
+}
+
+load_optional_env_file "$HOME/.hermes/.env"
+
 role_profile() {
   case "$1" in
     philip) echo "meridian-philip" ;;
@@ -361,6 +386,10 @@ remote_exec() {
   local user="${HERMES_MERIDIAN_QUALITY_SSH_USER:-${TERMINAL_SSH_USER:-}}"
   local key="${HERMES_MERIDIAN_QUALITY_SSH_KEY:-${TERMINAL_SSH_KEY:-}}"
   local password="${HERMES_MERIDIAN_QUALITY_SSH_PASSWORD:-${TERMINAL_SSH_PASSWORD:-}}"
+
+  if [[ -n "$key" ]]; then
+    key="$(expand_path "$key")"
+  fi
 
   if [[ -z "$host" || -z "$user" ]]; then
     echo "remote_exec requires TERMINAL_SSH_HOST/USER or HERMES_MERIDIAN_QUALITY_SSH_HOST/USER" >&2
