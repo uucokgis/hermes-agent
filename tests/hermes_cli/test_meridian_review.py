@@ -7,8 +7,11 @@ import yaml
 
 from hermes_cli.meridian_review import (
     MeridianReviewError,
+    apply_recommended_transition,
+    format_review_transition_result,
     latest_review_decision,
     parse_review_decision,
+    recommended_transition,
     review_detail_lines_for_task,
     review_brief_for_task,
 )
@@ -152,3 +155,100 @@ def test_review_detail_lines_include_transition_and_open_actions(tmp_path):
     assert any("Fix regression" in line for line in lines)
     assert any("Add regression test" in line for line in lines)
     assert any("+1 more open review action(s)" in line for line in lines)
+
+
+def test_recommended_transition_infers_default_route_from_final_outcome(tmp_path):
+    workspace = tmp_path / "workspace"
+    review_dir = workspace / "tasks" / "review" / "decisions"
+    _write_review(review_dir / "TASK-1-decision.md", _decision_metadata(review_outcome="approved"))
+
+    transition = recommended_transition("TASK-1", workspace)
+
+    assert transition is not None
+    assert transition["from_queue"] == "review"
+    assert transition["to_queue"] == "done"
+    assert transition["source"] == "inferred"
+
+
+def test_apply_recommended_transition_dry_run_reports_ready(tmp_path):
+    workspace = tmp_path / "workspace"
+    (workspace / "tasks" / "review").mkdir(parents=True, exist_ok=True)
+    _write_review(
+        workspace / "tasks" / "review" / "task-1.md",
+        {"id": "TASK-1", "title": "TASK-1"},
+    )
+    _write_review(
+        workspace / "tasks" / "review" / "decisions" / "TASK-1-decision.md",
+        _decision_metadata(
+            transition_recommendation={"from_queue": "review", "to_queue": "in_progress"},
+            reviewer="matthew",
+        ),
+    )
+
+    result = apply_recommended_transition("TASK-1", workspace, apply=False)
+
+    assert result["status"] == "ready"
+    assert result["actor"] == "matthew"
+    assert result["to_queue"] == "in_progress"
+
+
+def test_apply_recommended_transition_moves_task_when_apply_enabled(tmp_path):
+    workspace = tmp_path / "workspace"
+    (workspace / "tasks" / "review").mkdir(parents=True, exist_ok=True)
+    _write_review(
+        workspace / "tasks" / "review" / "task-1.md",
+        {"id": "TASK-1", "title": "TASK-1"},
+    )
+    _write_review(
+        workspace / "tasks" / "review" / "decisions" / "TASK-1-decision.md",
+        _decision_metadata(
+            transition_recommendation={"from_queue": "review", "to_queue": "waiting_human"},
+            review_outcome="needs_human",
+            reviewer="matthew",
+        ),
+    )
+
+    result = apply_recommended_transition("TASK-1", workspace, apply=True)
+
+    assert result["status"] == "applied"
+    assert (workspace / "tasks" / "waiting_human" / "task-1.md").exists()
+
+
+def test_apply_recommended_transition_reports_queue_mismatch(tmp_path):
+    workspace = tmp_path / "workspace"
+    (workspace / "tasks" / "done").mkdir(parents=True, exist_ok=True)
+    _write_review(
+        workspace / "tasks" / "done" / "task-1.md",
+        {"id": "TASK-1", "title": "TASK-1"},
+    )
+    _write_review(
+        workspace / "tasks" / "review" / "decisions" / "TASK-1-decision.md",
+        _decision_metadata(
+            transition_recommendation={"from_queue": "review", "to_queue": "done"},
+            review_outcome="approved",
+        ),
+    )
+
+    result = apply_recommended_transition("TASK-1", workspace, apply=True)
+
+    assert result["status"] == "queue_mismatch"
+    assert result["current_queue"] == "done"
+
+
+def test_format_review_transition_result_includes_dry_run_note(tmp_path):
+    workspace = tmp_path / "workspace"
+    review_dir = workspace / "tasks" / "review" / "decisions"
+    _write_review(
+        review_dir / "TASK-1-decision.md",
+        _decision_metadata(transition_recommendation={"from_queue": "review", "to_queue": "in_progress"}),
+    )
+
+    result = format_review_transition_result(
+        {
+            **recommended_transition("TASK-1", workspace),
+            "status": "ready",
+            "current_queue": "review",
+        }
+    )
+
+    assert "Dry-run only" in result

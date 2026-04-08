@@ -4791,6 +4791,22 @@ For more help on a command:
         help="Perform the migration; otherwise show a dry-run preview",
     )
 
+    meridian_review_transition = meridian_subparsers.add_parser(
+        "review-transition",
+        help="Preview or apply a structured Matthew review transition recommendation",
+    )
+    meridian_review_transition.add_argument("task_id", help="Task id or filename")
+    meridian_review_transition.add_argument(
+        "--workspace",
+        default=None,
+        help="Workspace root containing the tasks/ directory (default: auto-discover Meridian workspace)",
+    )
+    meridian_review_transition.add_argument(
+        "--apply",
+        action="store_true",
+        help="Perform the recommended transition instead of only printing a dry-run preview",
+    )
+
     meridian_parser.set_defaults(func=cmd_meridian)
 
     # =========================================================================

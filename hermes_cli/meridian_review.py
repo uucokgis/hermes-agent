@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from hermes_cli.meridian_runtime import parse_iso_datetime
+from hermes_cli.meridian_workflow import locate_task, transition_task
 
 
 REVIEW_SCHEMA_VERSION = 1
@@ -236,3 +237,120 @@ def review_detail_lines_for_task(task_id: str, workspace: str | Path | None, *, 
     if remaining > 0:
         lines.append(f"- +{remaining} more open review action(s)")
     return lines
+
+
+def recommended_transition(task_id: str, workspace: str | Path | None) -> dict[str, Any] | None:
+    decision = latest_review_decision(task_id, workspace)
+    if not decision or decision.status != "final":
+        return None
+    transition = dict(decision.transition_recommendation)
+    if not transition:
+        inferred = {
+            "approved": ("review", "done"),
+            "request_changes": ("review", "in_progress"),
+            "blocked": ("review", "waiting_human"),
+            "debt_only": ("review", "done"),
+            "needs_human": ("review", "waiting_human"),
+        }.get(decision.outcome)
+        if inferred:
+            transition = {"from_queue": inferred[0], "to_queue": inferred[1]}
+    from_queue = str(transition.get("from_queue") or "").strip()
+    to_queue = str(transition.get("to_queue") or "").strip()
+    if not to_queue:
+        return None
+    return {
+        "task_id": task_id,
+        "review_id": str(decision.metadata.get("review_id") or decision.path.stem),
+        "outcome": decision.outcome,
+        "decision_bucket": decision.bucket,
+        "from_queue": from_queue,
+        "to_queue": to_queue,
+        "actor": str(decision.metadata.get("reviewer") or "matthew").strip().lower() or "matthew",
+        "summary": str(decision.metadata.get("summary") or "").strip(),
+        "open_actions": len(decision.open_actions),
+        "source": "explicit" if decision.transition_recommendation else "inferred",
+        "decision_path": str(decision.path),
+    }
+
+
+def apply_recommended_transition(
+    task_id: str,
+    workspace: str | Path | None,
+    *,
+    apply: bool = False,
+) -> dict[str, Any]:
+    recommendation = recommended_transition(task_id, workspace)
+    if not recommendation:
+        return {
+            "task_id": task_id,
+            "status": "no_recommendation",
+            "applied": False,
+        }
+    document = locate_task(workspace, task_id)
+    expected_from_queue = recommendation.get("from_queue") or document.queue
+    if document.queue != expected_from_queue:
+        return {
+            **recommendation,
+            "status": "queue_mismatch",
+            "applied": False,
+            "current_queue": document.queue,
+        }
+    if not apply:
+        return {
+            **recommendation,
+            "status": "ready",
+            "applied": False,
+            "current_queue": document.queue,
+        }
+    result = transition_task(
+        workspace,
+        task_id=task_id,
+        actor=str(recommendation["actor"]),
+        from_queue=str(expected_from_queue),
+        to_queue=str(recommendation["to_queue"]),
+        reason=str(recommendation.get("summary") or f"review outcome: {recommendation.get('outcome')}"),
+        notes=f"Applied structured review decision {recommendation.get('review_id')}",
+    )
+    return {
+        **recommendation,
+        "status": "applied",
+        "applied": True,
+        "current_queue": document.queue,
+        "transition_result": result,
+    }
+
+
+def format_review_transition_result(result: dict[str, Any]) -> str:
+    status = str(result.get("status") or "unknown")
+    lines = [
+        "Meridian review transition",
+        f"  Task:           {result.get('task_id') or '-'}",
+        f"  Status:         {status}",
+    ]
+    if status == "no_recommendation":
+        lines.append("  No final structured transition recommendation was found.")
+        return "\n".join(lines)
+    if result.get("current_queue"):
+        lines.append(f"  Current queue:  {result.get('current_queue')}")
+    if result.get("from_queue") or result.get("to_queue"):
+        lines.append(
+            "  Recommendation: "
+            f"{result.get('from_queue') or '?'} -> {result.get('to_queue') or '?'}"
+        )
+    lines.append(f"  Actor:          {result.get('actor') or '-'}")
+    lines.append(f"  Source:         {result.get('source') or '-'}")
+    if result.get("review_id"):
+        lines.append(f"  Review id:      {result.get('review_id')}")
+    if result.get("decision_path"):
+        lines.append(f"  Decision file:  {result.get('decision_path')}")
+    if result.get("summary"):
+        lines.append(f"  Summary:        {result.get('summary')}")
+    if result.get("open_actions") is not None:
+        lines.append(f"  Open actions:   {result.get('open_actions')}")
+    if status == "queue_mismatch":
+        lines.append("  The task is no longer in the expected source queue, so no transition was applied.")
+    elif status == "ready":
+        lines.append("  Dry-run only. Re-run with --apply to execute the transition.")
+    elif status == "applied":
+        lines.append("  Transition applied through Meridian workflow rules.")
+    return "\n".join(lines)

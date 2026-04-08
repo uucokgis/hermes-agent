@@ -196,6 +196,53 @@ def test_collect_snapshot_reads_waiting_human_from_canonical_queue(tmp_path, mon
     assert snapshot["planned_actions"][0]["kind"] == "hold_waiting_human"
 
 
+def test_dispatch_auto_applies_review_approval_when_no_open_actions(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+
+    _write_task(workspace / "tasks" / "review" / "task-1.md", "TASK-1")
+    _write_review_decision(
+        workspace / "tasks" / "review" / "decisions" / "TASK-1-decision.md",
+        review_task_id="TASK-1",
+        review_outcome="approved",
+        decision_bucket="passed",
+        required_actions=[],
+        transition_recommendation={"from_queue": "review", "to_queue": "done"},
+    )
+
+    snapshot = md.dispatch_meridian(workspace)
+
+    assert snapshot["workflow_state"] == "idle"
+    assert (workspace / "tasks" / "done" / "task-1.md").exists()
+
+
+def test_dispatch_does_not_auto_apply_done_transition_with_open_actions(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+
+    _write_task(workspace / "tasks" / "review" / "task-1.md", "TASK-1")
+    _write_review_decision(
+        workspace / "tasks" / "review" / "decisions" / "TASK-1-decision.md",
+        review_task_id="TASK-1",
+        review_outcome="approved",
+        decision_bucket="passed",
+        required_actions=[{"id": "RA-1", "summary": "Follow-up needed", "status": "open"}],
+        transition_recommendation={"from_queue": "review", "to_queue": "done"},
+    )
+
+    snapshot = md.dispatch_meridian(workspace)
+
+    assert snapshot["workflow_state"] == "review"
+    assert snapshot["auto_review_transition"]["status"] == "blocked_open_actions"
+    assert (workspace / "tasks" / "review" / "task-1.md").exists()
+
+
 def test_collect_snapshot_does_not_wedge_waiting_human_from_stale_derived_state(tmp_path, monkeypatch):
     from hermes_cli import meridian_dispatcher as md
 
@@ -814,6 +861,51 @@ def test_meridian_command_migrate_dry_run_prints_preview(tmp_path, monkeypatch, 
     assert (workspace / "tasks" / "in-progress" / "legacy-task.md").exists()
 
 
+def test_meridian_command_review_transition_prints_dry_run(tmp_path, monkeypatch, capsys):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    _write_task(workspace / "tasks" / "review" / "task-1.md", "TASK-1")
+    _write_review_decision(
+        workspace / "tasks" / "review" / "decisions" / "TASK-1-decision.md",
+        review_task_id="TASK-1",
+        transition_recommendation={"from_queue": "review", "to_queue": "in_progress"},
+    )
+
+    rc = md.meridian_command(
+        Namespace(meridian_command="review-transition", workspace=str(workspace), task_id="TASK-1", apply=False)
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Meridian review transition" in out
+    assert "review -> in_progress" in out
+    assert "Dry-run only" in out
+
+
+def test_meridian_command_review_transition_apply_moves_task(tmp_path, monkeypatch, capsys):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    _write_task(workspace / "tasks" / "review" / "task-1.md", "TASK-1")
+    _write_review_decision(
+        workspace / "tasks" / "review" / "decisions" / "TASK-1-decision.md",
+        review_task_id="TASK-1",
+        review_outcome="approved",
+        decision_bucket="passed",
+        transition_recommendation={"from_queue": "review", "to_queue": "done"},
+    )
+
+    rc = md.meridian_command(
+        Namespace(meridian_command="review-transition", workspace=str(workspace), task_id="TASK-1", apply=True)
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Transition applied" in out
+    assert (workspace / "tasks" / "done" / "task-1.md").exists()
+
+
 def test_main_routes_meridian_status_subcommand(monkeypatch):
     import sys
     import hermes_cli.main as main_mod
@@ -968,6 +1060,45 @@ def test_main_routes_meridian_migrate_subcommand(monkeypatch):
         "command": "meridian",
         "subcommand": "migrate",
         "workspace": "/tmp/meridian-workspace",
+        "apply": True,
+    }
+
+
+def test_main_routes_meridian_review_transition_subcommand(monkeypatch):
+    import sys
+    import hermes_cli.main as main_mod
+
+    captured = {}
+
+    def fake_cmd_meridian(args):
+        captured["command"] = args.command
+        captured["subcommand"] = args.meridian_command
+        captured["workspace"] = args.workspace
+        captured["task_id"] = args.task_id
+        captured["apply"] = args.apply
+
+    monkeypatch.setattr(main_mod, "cmd_meridian", fake_cmd_meridian)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "hermes",
+            "meridian",
+            "review-transition",
+            "TASK-1",
+            "--workspace",
+            "/tmp/meridian-workspace",
+            "--apply",
+        ],
+    )
+
+    main_mod.main()
+
+    assert captured == {
+        "command": "meridian",
+        "subcommand": "review-transition",
+        "workspace": "/tmp/meridian-workspace",
+        "task_id": "TASK-1",
         "apply": True,
     }
 

@@ -42,7 +42,12 @@ from hermes_cli.meridian_maintenance import (
     meridian_doctor_report,
     migrate_in_progress_queue,
 )
-from hermes_cli.meridian_review import latest_review_decision
+from hermes_cli.meridian_review import (
+    apply_recommended_transition,
+    format_review_transition_result,
+    latest_review_decision,
+    recommended_transition,
+)
 from hermes_utils import atomic_json_write
 
 
@@ -731,6 +736,25 @@ def _dispatch_target_changed(state: dict[str, Any], snapshot: dict[str, Any]) ->
     )
 
 
+def _auto_apply_review_transition(workspace: str | Path, snapshot: dict[str, Any]) -> dict[str, Any] | None:
+    if snapshot.get("workflow_state") != "review":
+        return None
+    task_id = str(snapshot.get("active_task_id") or "").strip()
+    if not task_id:
+        return None
+    recommendation = recommended_transition(task_id, workspace)
+    if not recommendation:
+        return None
+    if recommendation.get("to_queue") == "done" and int(recommendation.get("open_actions") or 0) > 0:
+        return {
+            **recommendation,
+            "status": "blocked_open_actions",
+            "applied": False,
+            "current_queue": snapshot.get("workflow_state"),
+        }
+    return apply_recommended_transition(task_id, workspace, apply=True)
+
+
 def dispatch_meridian(
     workspace: str | Path | None = None,
     *,
@@ -740,6 +764,26 @@ def dispatch_meridian(
     previous_state = _read_json(STATE_PATH)
     current_time = now or runtime_utcnow()
     snapshot = collect_meridian_snapshot(workspace, state=previous_state, now=current_time)
+    auto_review_transition = _auto_apply_review_transition(snapshot["workspace"], snapshot)
+    if auto_review_transition and auto_review_transition.get("applied"):
+        emit_meridian_event(
+            "meridian_review_transition_applied",
+            {
+                "workspace": snapshot["workspace"],
+                "task_id": auto_review_transition.get("task_id"),
+                "from_queue": auto_review_transition.get("from_queue"),
+                "to_queue": auto_review_transition.get("to_queue"),
+                "review_id": auto_review_transition.get("review_id"),
+                "source": auto_review_transition.get("source"),
+            },
+            now=current_time,
+        )
+        snapshot = collect_meridian_snapshot(workspace, state=previous_state, now=current_time)
+    elif auto_review_transition:
+        snapshot = {
+            **snapshot,
+            "auto_review_transition": dict(auto_review_transition),
+        }
     merged = persist_meridian_snapshot(snapshot, previous_state=previous_state)
 
     acquired, orchestrator_lease, lease_reason = acquire_orchestrator_lease(
@@ -933,6 +977,13 @@ def _print_status(snapshot: dict[str, Any]) -> None:
         print(f"  Active leases:  {len(worker_leases)}")
     if snapshot.get("drift_detected"):
         print("  Drift detected: yes")
+    auto_review_transition = snapshot.get("auto_review_transition")
+    if isinstance(auto_review_transition, dict):
+        print(
+            "  Review auto:    "
+            f"{auto_review_transition.get('status') or '-'}"
+            f" ({auto_review_transition.get('from_queue') or '?'} -> {auto_review_transition.get('to_queue') or '?'})"
+        )
     workspace = snapshot.get("workspace")
     if workspace:
         doctor = meridian_doctor_report(workspace)
@@ -1214,6 +1265,22 @@ def meridian_command(args) -> int:
         print(
             format_in_progress_migration(
                 migrate_in_progress_queue(
+                    _resolve_workspace_path(workspace),
+                    apply=bool(getattr(args, "apply", False)),
+                )
+            )
+        )
+        return 0
+
+    if subcommand == "review-transition":
+        task_id = getattr(args, "task_id", None)
+        if not task_id:
+            print("Error: meridian review-transition requires a task id.")
+            return 1
+        print(
+            format_review_transition_result(
+                apply_recommended_transition(
+                    task_id,
                     _resolve_workspace_path(workspace),
                     apply=bool(getattr(args, "apply", False)),
                 )
