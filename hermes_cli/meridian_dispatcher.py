@@ -1097,6 +1097,56 @@ def _print_task_history(workspace: str | Path, task_id: str) -> None:
         )
 
 
+def _task_board_line(task: TaskRef) -> str:
+    metadata = dict(task.metadata or {})
+    title = str(metadata.get("title") or task.task_id).strip()
+    branch = str(metadata.get("pr_branch") or metadata.get("branch") or "").strip()
+    commit_sha = str(metadata.get("commit_sha") or "").strip()
+    pushed = metadata.get("pushed")
+    verification_status = str(metadata.get("verification_status") or "").strip()
+    claimed_by = str(metadata.get("claimed_by") or metadata.get("assigned_to") or "").strip()
+
+    parts = [f"- {task.task_id}"]
+    if title and title != task.task_id:
+        parts.append(f"({title})")
+
+    details: list[str] = []
+    if claimed_by:
+        details.append(f"owner={claimed_by}")
+    if branch:
+        details.append(f"branch={branch}")
+    if commit_sha:
+        details.append(f"commit={commit_sha[:12]}")
+    if verification_status:
+        details.append(f"verify={verification_status}")
+    if pushed is not None:
+        details.append(f"pushed={str(pushed).lower()}")
+
+    if details:
+        parts.append("| " + " ".join(details))
+    return " ".join(parts)
+
+
+def _print_tasks_board(workspace: str | Path | None) -> None:
+    workspace_path = _resolve_workspace_path(workspace)
+    queues = list_task_refs(workspace_path)
+    queue_order = ("backlog", "ready", "in_progress", "review", "waiting_human", "done", "debt")
+
+    print("Meridian task board")
+    print(f"  Workspace: {workspace_path}")
+    for queue in queue_order:
+        items = queues.get(queue, [])
+        print(f"\n[{queue}] ({len(items)})")
+        if not items:
+            print("  -")
+            continue
+        for task in items[:12]:
+            print(f"  {_task_board_line(task)}")
+        remaining = len(items) - 12
+        if remaining > 0:
+            print(f"  - +{remaining} more")
+
+
 def _print_dispatch_summary(snapshot: dict[str, Any]) -> None:
     if snapshot["should_dispatch"]:
         actions = snapshot.get("last_dispatch_results", {}).get("dispatched_actions", [])
@@ -1252,6 +1302,10 @@ def meridian_command(args) -> int:
             print("Error: meridian history requires a task id.")
             return 1
         _print_task_history(workspace, task_id)
+        return 0
+
+    if subcommand == "tasks":
+        _print_tasks_board(workspace)
         return 0
 
     if subcommand == "quality":

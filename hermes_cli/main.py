@@ -4741,6 +4741,16 @@ For more help on a command:
         help="Workspace root containing the tasks/ directory (default: auto-discover Meridian workspace)",
     )
 
+    meridian_tasks = meridian_subparsers.add_parser(
+        "tasks",
+        help="Show a compact Jira-style Meridian task board by queue",
+    )
+    meridian_tasks.add_argument(
+        "--workspace",
+        default=None,
+        help="Workspace root containing the tasks/ directory (default: auto-discover Meridian workspace)",
+    )
+
     meridian_quality = meridian_subparsers.add_parser(
         "quality",
         help="Show or run Meridian review-signal quality scans",

@@ -988,6 +988,52 @@ def test_meridian_command_review_transition_apply_moves_task(tmp_path, monkeypat
     assert (workspace / "tasks" / "done" / "task-1.md").exists()
 
 
+def test_meridian_tasks_prints_compact_board(tmp_path, capsys):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    _write_task(
+        workspace / "tasks" / "in_progress" / "task-1.md",
+        "TASK-1",
+        metadata={
+            "title": "Improve lint gate",
+            "claimed_by": "fatih",
+            "branch": "task/improve-lint-gate",
+            "commit_sha": "abcdef1234567890",
+            "verification_status": "passed",
+            "pushed": True,
+        },
+    )
+    _write_task(
+        workspace / "tasks" / "review" / "task-2.md",
+        "TASK-2",
+        metadata={
+            "title": "Review lint gate",
+            "branch": "task/improve-lint-gate",
+            "commit_sha": "abcdef1234567890",
+            "verification_status": "passed",
+            "pushed": False,
+        },
+    )
+
+    rc = md.meridian_command(
+        Namespace(meridian_command="tasks", workspace=str(workspace))
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Meridian task board" in out
+    assert "[in_progress] (1)" in out
+    assert "TASK-1" in out
+    assert "owner=fatih" in out
+    assert "branch=task/improve-lint-gate" in out
+    assert "commit=abcdef123456" in out
+    assert "verify=passed" in out
+    assert "pushed=true" in out
+    assert "[review] (1)" in out
+    assert "pushed=false" in out
+
+
 def test_main_routes_meridian_status_subcommand(monkeypatch):
     import sys
     import hermes_cli.main as main_mod
