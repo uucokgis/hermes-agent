@@ -22,6 +22,7 @@ from typing import Any
 from hermes_utils import atomic_json_write
 
 from hermes_cli.meridian_runtime import EVENT_LOG_PATH, emit_meridian_event, parse_iso_datetime
+from hermes_cli.meridian_review import is_review_decision_artifact
 
 
 DEFAULT_REMOTE_WORKSPACE = "/home/umut/meridian"
@@ -880,23 +881,32 @@ def _parse_task_frontmatter(content: str) -> dict[str, Any]:
 
 
 def _local_review_candidates(workspace: str) -> list[dict[str, str]]:
-    review_dir = Path(workspace) / "tasks" / "review"
-    if not review_dir.exists():
-        return []
+    root = Path(workspace) / "tasks" / "review"
+    candidate_dirs = [root / "active", root]
     candidates: list[dict[str, str]] = []
-    for path in sorted(review_dir.iterdir()):
-        if not path.is_file() or path.name.startswith("."):
+    seen_task_ids: set[str] = set()
+    for review_dir in candidate_dirs:
+        if not review_dir.exists():
             continue
-        try:
-            metadata = _parse_task_frontmatter(path.read_text(encoding="utf-8"))
-        except OSError:
-            continue
-        candidates.append(
-            {
-                "task_id": str(metadata.get("id") or path.stem),
-                "transition_at": str(metadata.get("last_transition_at") or metadata.get("updated_at") or ""),
-            }
-        )
+        for path in sorted(review_dir.iterdir()):
+            if not path.is_file() or path.name.startswith("."):
+                continue
+            try:
+                metadata = _parse_task_frontmatter(path.read_text(encoding="utf-8"))
+            except OSError:
+                continue
+            if review_dir == root and is_review_decision_artifact(path, metadata):
+                continue
+            task_id = str(metadata.get("id") or path.stem)
+            if task_id in seen_task_ids:
+                continue
+            seen_task_ids.add(task_id)
+            candidates.append(
+                {
+                    "task_id": task_id,
+                    "transition_at": str(metadata.get("last_transition_at") or metadata.get("updated_at") or ""),
+                }
+            )
     return candidates
 
 
@@ -907,9 +917,12 @@ from pathlib import Path
 import yaml
 
 workspace = Path(__WORKSPACE__).expanduser()
-review_dir = workspace / "tasks" / "review"
+review_root = workspace / "tasks" / "review"
 payload = []
-if review_dir.exists():
+seen = set()
+for review_dir in (review_root / "active", review_root):
+    if not review_dir.exists():
+        continue
     for path in sorted(review_dir.iterdir()):
         if not path.is_file() or path.name.startswith('.'):
             continue
@@ -924,8 +937,15 @@ if review_dir.exists():
                 loaded = yaml.safe_load(content[4:closing]) or {}
                 if isinstance(loaded, dict):
                     metadata = loaded
+        kind = str(metadata.get('review_kind') or '').strip().lower()
+        if review_dir == review_root and kind == 'decision':
+            continue
+        task_id = str(metadata.get('id') or path.stem)
+        if task_id in seen:
+            continue
+        seen.add(task_id)
         payload.append({
-            'task_id': str(metadata.get('id') or path.stem),
+            'task_id': task_id,
             'transition_at': str(metadata.get('last_transition_at') or metadata.get('updated_at') or ''),
         })
 print(json.dumps(payload, ensure_ascii=False))

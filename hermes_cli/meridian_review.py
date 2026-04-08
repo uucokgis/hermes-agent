@@ -87,7 +87,7 @@ def _review_candidate_dirs(workspace: Path) -> tuple[Path, ...]:
     )
 
 
-def _looks_like_decision_file(path: Path, metadata: dict[str, Any]) -> bool:
+def is_review_decision_artifact(path: Path, metadata: dict[str, Any]) -> bool:
     kind = str(metadata.get("review_kind") or "").strip().lower()
     if kind:
         return kind == "decision"
@@ -147,7 +147,7 @@ def latest_review_decision(task_id: str, workspace: str | Path | None) -> Meridi
                 metadata, _body = _split_frontmatter(path.read_text(encoding="utf-8"))
             except OSError:
                 continue
-            if not _looks_like_decision_file(path, metadata):
+            if not is_review_decision_artifact(path, metadata):
                 continue
             if str(metadata.get("review_task_id") or "").strip() != normalized_task_id:
                 continue

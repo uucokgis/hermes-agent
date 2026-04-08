@@ -95,3 +95,22 @@ def test_review_brief_for_task_includes_open_action_count(tmp_path):
     assert "request_changes" in brief
     assert "blocking" in brief
     assert "open_actions: `1`" in brief
+
+
+def test_latest_review_decision_reads_decisions_subdirectory_first(tmp_path):
+    workspace = tmp_path / "workspace"
+    flat_review_dir = workspace / "tasks" / "review"
+    decisions_dir = flat_review_dir / "decisions"
+    _write_review(
+        flat_review_dir / "TASK-1-legacy.md",
+        _decision_metadata(review_id="REVIEW-LEGACY", updated_at="2026-04-08T01:00:00+00:00"),
+    )
+    _write_review(
+        decisions_dir / "TASK-1-current.md",
+        _decision_metadata(review_id="REVIEW-CURRENT", updated_at="2026-04-08T02:00:00+00:00"),
+    )
+
+    decision = latest_review_decision("TASK-1", workspace)
+
+    assert decision is not None
+    assert decision.metadata["review_id"] == "REVIEW-CURRENT"

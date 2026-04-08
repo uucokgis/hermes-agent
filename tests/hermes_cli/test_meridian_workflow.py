@@ -262,3 +262,24 @@ def test_done_transition_clears_claim_metadata(tmp_path):
     assert "claimed_by" not in document.metadata
     assert "claimed_at" not in document.metadata
     assert "claim_expires_at" not in document.metadata
+
+
+def test_transition_to_review_writes_to_active_review_queue(tmp_path):
+    workspace = _make_workspace(tmp_path)
+    task_path = workspace / "tasks" / "in_progress" / "task-1.md"
+    _write_task(task_path, "TASK-1", metadata={"claimed_by": "fatih"})
+
+    result = transition_task(
+        workspace,
+        task_id="TASK-1",
+        actor="fatih",
+        from_queue="in_progress",
+        to_queue="review",
+    )
+
+    moved = workspace / "tasks" / "review" / "active" / "task-1.md"
+    assert result["to_queue"] == "review"
+    assert moved.exists()
+    document = locate_task(workspace, "TASK-1")
+    assert document.path == moved
+    assert document.metadata["reviewer"] == "matthew"

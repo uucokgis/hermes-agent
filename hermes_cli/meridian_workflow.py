@@ -31,6 +31,9 @@ QUEUE_NAMES = (
 LEGACY_QUEUE_ALIASES = {
     "in_progress": ("in-progress",),
 }
+QUEUE_SUBDIRECTORIES = {
+    "review": ("review", "active"),
+}
 DISPATCH_VISIBLE_QUEUES = ("backlog", "ready", "in_progress", "review", "done", "debt")
 PERSONA_QUEUES = {
     "philip": frozenset({"backlog", "ready", "debt"}),
@@ -68,22 +71,44 @@ def _isoformat(dt: datetime) -> str:
 
 
 def _task_dirs(workspace: Path) -> dict[str, Path]:
+    return {name: canonical_queue_dir(workspace, name) for name in QUEUE_NAMES}
+
+
+def canonical_queue_dir(workspace: Path, queue: str) -> Path:
     tasks_root = workspace / "tasks"
-    return {name: tasks_root / name for name in QUEUE_NAMES}
+    subpath = QUEUE_SUBDIRECTORIES.get(queue)
+    if subpath:
+        return tasks_root.joinpath(*subpath)
+    return tasks_root / queue
 
 
 def queue_dir_candidates(workspace: Path, queue: str) -> tuple[Path, ...]:
+    candidates = [canonical_queue_dir(workspace, queue)]
     tasks_root = workspace / "tasks"
-    names = (queue, *LEGACY_QUEUE_ALIASES.get(queue, ()))
+    if queue == "review":
+        candidates.append(tasks_root / "review")
+    names = LEGACY_QUEUE_ALIASES.get(queue, ())
     seen: set[Path] = set()
-    candidates: list[Path] = []
+    ordered: list[Path] = []
+    for path in candidates:
+        if path in seen:
+            continue
+        seen.add(path)
+        ordered.append(path)
     for name in names:
         path = tasks_root / name
         if path in seen:
             continue
         seen.add(path)
-        candidates.append(path)
-    return tuple(candidates)
+        ordered.append(path)
+    return tuple(ordered)
+
+
+def workspace_root_from_task_path(path: Path) -> Path:
+    for parent in path.parents:
+        if parent.name == "tasks":
+            return parent.parent
+    raise MeridianWorkflowError(f"Unable to determine Meridian workspace root from task path: {path}")
 
 
 def _coerce_metadata(data: Any) -> dict[str, Any]:
@@ -305,7 +330,8 @@ def _merge_metadata_patch(metadata: dict[str, Any], metadata_patch: dict[str, An
 
 def _persist_document(document: TaskDocument, destination_queue: str | None = None) -> TaskDocument:
     destination_queue = destination_queue or document.queue
-    destination_path = _task_dirs(document.path.parents[2])[destination_queue] / document.path.name
+    workspace = workspace_root_from_task_path(document.path)
+    destination_path = canonical_queue_dir(workspace, destination_queue) / document.path.name
     document.metadata["status"] = destination_queue
     _clear_empty_fields(document.metadata)
     rendered = _render_task_document(document.metadata, document.body)
