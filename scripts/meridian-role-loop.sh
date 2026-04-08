@@ -296,12 +296,14 @@ Priority rules:
 - first process tasks/review/active
 - review scan order must stay narrow and deterministic:
   1. list tasks/review/active only
-  2. read only the active review task files that are currently present
-  3. if a decision is needed, inspect only the matching files in tasks/review/decisions
-  4. only if tasks/review/active is empty, do one short pass over tasks/review/patrol
+  2. select at most 2 active review items for this pass, preferring the newest or most recently touched files
+  3. read only those 1-2 selected active review task files
+  4. if a decision is needed, inspect only the matching files in tasks/review/decisions for those same selected items
+  5. only if tasks/review/active is empty, do one short pass over tasks/review/patrol
 - do not recursively scan the whole tasks/review tree
 - do not grep broad MATTHEW.* or PHILIP.* patterns across the repository
 - do not inspect tasks/ready, tasks/backlog, or orchestration status files unless tasks/review/active is empty and you are leaving a single targeted follow-up
+- do not review more than 2 active items in a single pass; defer the rest to the next pass
 - when review finds missing commits, missing verification, or unpushed work, send it back explicitly instead of silently stalling
 - when review queue is empty, do a short read-only architecture/security patrol and convert concrete findings into debt/investigation tasks
 - your night patrol should emphasize security review, architecture drift, dependency/package risk, code organization, and creating tech_debt tasks when evidence exists
