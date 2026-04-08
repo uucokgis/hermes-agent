@@ -542,6 +542,10 @@ class TestParseContextLimitFromError:
         msg = "Error: context window of 4096 tokens exceeded"
         assert parse_context_limit_from_error(msg) == 4096
 
+    def test_available_context_size_format(self):
+        msg = "request (32779 tokens) exceeds the available context size (32768 tokens), try increasing it"
+        assert parse_context_limit_from_error(msg) == 32768
+
     def test_completely_unrelated_error(self):
         assert parse_context_limit_from_error("Invalid API key") is None
 

@@ -10,7 +10,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HERMES_BIN="$ROOT_DIR/venv/bin/hermes"
 ROLE_LOOP="$ROOT_DIR/scripts/meridian-role-loop.sh"
 STATE_DIR="${HOME}/.hermes/meridian/loops"
-SERIALIZE_MODEL_ACCESS="${HERMES_MERIDIAN_SERIALIZE_MODEL_ACCESS:-0}"
+# Keep the launcher aligned with meridian-role-loop.sh's default:
+# one model request at a time unless the operator explicitly opts out.
+SERIALIZE_MODEL_ACCESS="${HERMES_MERIDIAN_SERIALIZE_MODEL_ACCESS:-1}"
 
 mkdir -p "$STATE_DIR"
 

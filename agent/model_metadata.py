@@ -572,12 +572,14 @@ def parse_context_limit_from_error(error_msg: str) -> Optional[int]:
       - "context_length_exceeded: 131072"
       - "Maximum context size 32768 exceeded"
       - "model's max context length is 65536"
+      - "request (32779 tokens) exceeds the available context size (32768 tokens)"
     """
     error_lower = error_msg.lower()
     # Pattern: look for numbers near context-related keywords
     patterns = [
         r'(?:max(?:imum)?|limit)\s*(?:context\s*)?(?:length|size|window)?\s*(?:is|of|:)?\s*(\d{4,})',
         r'context\s*(?:length|size|window)\s*(?:is|of|:)?\s*(\d{4,})',
+        r'context\s*(?:length|size|window)[^(]*\(\s*(\d{4,})\s*tokens?\s*\)',
         r'(\d{4,})\s*(?:token)?\s*(?:context|limit)',
         r'>\s*(\d{4,})\s*(?:max|limit|token)',  # "250000 tokens > 200000 maximum"
         r'(\d{4,})\s*(?:max(?:imum)?)\b',  # "200000 maximum"
