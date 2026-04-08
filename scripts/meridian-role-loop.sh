@@ -7,6 +7,10 @@ WORKSPACE="${2:-${HERMES_MERIDIAN_WORKSPACE:-/home/umut/meridian}}"
 SLEEP_SECONDS="${3:-}"
 PROFILE_OVERRIDE="${4:-}"
 TIMEZONE_NAME="${HERMES_MERIDIAN_TIMEZONE:-Europe/Madrid}"
+SERIALIZE_MODEL_ACCESS="${HERMES_MERIDIAN_SERIALIZE_MODEL_ACCESS:-1}"
+PASS_TIMEOUT_SECONDS="${HERMES_MERIDIAN_PASS_TIMEOUT_SECONDS:-900}"
+MODEL_LOCK_FILE="${HERMES_MERIDIAN_MODEL_LOCK_FILE:-$HOME/.hermes/meridian/loops/model-provider.lock}"
+STARTUP_JITTER_SECONDS="${HERMES_MERIDIAN_STARTUP_JITTER_SECONDS:-15}"
 
 if [[ -z "$ROLE" ]]; then
   echo "Usage: $0 <philip|fatih|matthew> [workspace] [sleep_seconds] [profile]" >&2
@@ -284,14 +288,73 @@ if [[ -z "$SLEEP_SECONDS" ]]; then
   SLEEP_SECONDS="$(role_default_sleep "$ROLE")"
 fi
 
+role_default_max_turns() {
+  case "$1" in
+    philip) echo 12 ;;
+    fatih) echo 16 ;;
+    matthew) echo 14 ;;
+    *)
+      echo "Unknown role: $1" >&2
+      exit 1
+      ;;
+  esac
+}
+
+role_max_turns() {
+  local role_upper env_name value
+  role_upper="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
+  env_name="HERMES_MERIDIAN_MAX_TURNS_${role_upper}"
+  value="${!env_name:-${HERMES_MERIDIAN_MAX_TURNS:-}}"
+  if [[ -n "$value" ]]; then
+    echo "$value"
+    return
+  fi
+  role_default_max_turns "$1"
+}
+
+run_with_timeout() {
+  local timeout_seconds="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout --signal=TERM --kill-after=30s "${timeout_seconds}s" "$@"
+    return $?
+  fi
+  "$@"
+}
+
+run_serialized_chat_pass() {
+  local max_turns
+  max_turns="$(role_max_turns "$ROLE")"
+
+  if [[ "$SERIALIZE_MODEL_ACCESS" == "1" ]] && command -v flock >/dev/null 2>&1; then
+    mkdir -p "$(dirname "$MODEL_LOCK_FILE")"
+    (
+      flock -w 600 9 || {
+        echo "[$ROLE] failed to acquire model lock within 600s: $MODEL_LOCK_FILE" >&2
+        exit 124
+      }
+      run_with_timeout "$PASS_TIMEOUT_SECONDS" \
+        "$HERMES_BIN" -p "$PROFILE" chat --quiet --yolo --max-turns "$max_turns" -q "$(build_prompt "$ROLE")"
+    ) 9>"$MODEL_LOCK_FILE"
+    return $?
+  fi
+
+  run_with_timeout "$PASS_TIMEOUT_SECONDS" \
+    "$HERMES_BIN" -p "$PROFILE" chat --quiet --yolo --max-turns "$max_turns" -q "$(build_prompt "$ROLE")"
+}
+
 export HERMES_MERIDIAN_WORKSPACE="$WORKSPACE"
 export HERMES_MERIDIAN_QUALITY_WORKSPACE="${HERMES_MERIDIAN_QUALITY_WORKSPACE:-$WORKSPACE}"
+
+if [[ "$STARTUP_JITTER_SECONDS" =~ ^[0-9]+$ ]] && (( STARTUP_JITTER_SECONDS > 0 )); then
+  sleep $(( RANDOM % (STARTUP_JITTER_SECONDS + 1) ))
+fi
 
 while true; do
   echo "=== $(date -Is) [$ROLE] profile=$PROFILE workspace=$WORKSPACE ==="
   if [[ "$ROLE" == "matthew" ]]; then
     "$HERMES_BIN" -p "$PROFILE" meridian quality --run --workspace "$WORKSPACE" || true
   fi
-  "$HERMES_BIN" -p "$PROFILE" chat --quiet --yolo --max-turns 40 -q "$(build_prompt "$ROLE")"
+  run_serialized_chat_pass || true
   sleep "$SLEEP_SECONDS"
 done
