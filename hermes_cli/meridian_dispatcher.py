@@ -988,8 +988,11 @@ def _print_status(snapshot: dict[str, Any]) -> None:
         )
     workspace = snapshot.get("workspace")
     if workspace:
-        doctor = meridian_doctor_report(workspace)
-        if not doctor.get("healthy"):
+        try:
+            doctor = run_meridian_doctor(workspace)
+        except Exception:
+            doctor = None
+        if isinstance(doctor, dict) and not doctor.get("healthy"):
             print("  Maintenance:   issues detected (run `hermes meridian doctor`)")
     recent_events = _recent_meridian_events(limit=5)
     if recent_events:
