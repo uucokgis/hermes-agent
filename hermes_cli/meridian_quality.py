@@ -333,12 +333,9 @@ def _normalize_path_list(value: Any) -> list[str]:
     return normalized
 
 
-def _task_scope_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
-    linked_files = _normalize_path_list(metadata.get("linked_files"))
-    linked_dirs = _normalize_path_list(metadata.get("linked_dirs"))
-    scope_entries = linked_files + linked_dirs
+def _task_scope_from_paths(scope_entries: list[str], *, reason: str, empty_reason: str) -> dict[str, Any]:
     if not scope_entries:
-        return {"mode": "full", "reason": "no_scope_metadata", "paths": []}
+        return {"mode": "full", "reason": empty_reason, "paths": []}
 
     backend_hit = False
     frontend_hit = False
@@ -360,7 +357,7 @@ def _task_scope_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
             categories.append("frontend")
         return {
             "mode": "scoped",
-            "reason": "linked_paths",
+            "reason": reason,
             "paths": scope_entries,
             "categories": categories,
         }
@@ -368,12 +365,22 @@ def _task_scope_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     if non_code_hit:
         return {
             "mode": "docs_only",
-            "reason": "linked_paths_non_code_only",
+            "reason": f"{reason}_non_code_only",
             "paths": scope_entries,
             "categories": [],
         }
 
     return {"mode": "full", "reason": "unclassified_scope", "paths": scope_entries}
+
+
+def _task_scope_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    linked_files = _normalize_path_list(metadata.get("linked_files"))
+    linked_dirs = _normalize_path_list(metadata.get("linked_dirs"))
+    return _task_scope_from_paths(
+        linked_files + linked_dirs,
+        reason="linked_paths",
+        empty_reason="no_scope_metadata",
+    )
 
 
 def _filter_lanes_for_scope(available_lanes: list[dict[str, str]], scope: dict[str, Any]) -> list[dict[str, str]]:
@@ -474,6 +481,53 @@ def _task_metadata_for_scope(executor: Executor, task_id: str) -> dict[str, Any]
     if executor.mode == "ssh":
         return _locate_task_metadata_ssh(executor, task_id)
     return _locate_task_metadata_local(executor, task_id)
+
+
+def _git_diff_candidates(metadata: dict[str, Any]) -> list[tuple[str, str]]:
+    branch = str(metadata.get("pr_branch") or metadata.get("branch") or metadata.get("source_branch") or "").strip()
+    base_branch = str(metadata.get("base_branch") or metadata.get("target_branch") or "main").strip() or "main"
+    candidates: list[tuple[str, str]] = []
+    if branch:
+        candidates.extend(
+            [
+                (f"origin/{base_branch}...{branch}", "git_branch_diff"),
+                (f"{base_branch}...{branch}", "git_branch_diff"),
+            ]
+        )
+    candidates.extend(
+        [
+            ("HEAD~1..HEAD", "git_head_diff"),
+            ("HEAD^..HEAD", "git_head_diff"),
+        ]
+    )
+    return candidates
+
+
+def _git_changed_paths(executor: Executor, metadata: dict[str, Any]) -> tuple[list[str], str]:
+    for revision_range, reason in _git_diff_candidates(metadata):
+        command = f"git diff --name-only --relative {shlex.quote(revision_range)}"
+        result = _run_command(executor, command, cwd=executor.workspace, timeout=45)
+        if result.returncode != 0:
+            continue
+        paths = _normalize_path_list(result.stdout.splitlines())
+        if paths:
+            return paths, reason
+    return [], ""
+
+
+def _task_scope(executor: Executor, metadata: dict[str, Any]) -> dict[str, Any]:
+    metadata_scope = _task_scope_from_metadata(metadata)
+    if metadata_scope.get("mode") != "full":
+        return metadata_scope
+
+    diff_paths, reason = _git_changed_paths(executor, metadata)
+    if diff_paths:
+        return _task_scope_from_paths(
+            diff_paths,
+            reason=reason or "git_diff",
+            empty_reason="no_git_diff_scope",
+        )
+    return metadata_scope
 
 
 def _summarize_lanes(lanes: list[dict[str, Any]]) -> dict[str, int]:
@@ -907,7 +961,7 @@ def _scan_task(
 ) -> dict[str, Any]:
     started = time.monotonic()
     metadata = _task_metadata_for_scope(executor, task_id)
-    scope = _task_scope_from_metadata(metadata)
+    scope = _task_scope(executor, metadata)
     available_lanes = _available_lanes(executor)
     selected_lanes = _filter_lanes_for_scope(available_lanes, scope)
     scope = {
