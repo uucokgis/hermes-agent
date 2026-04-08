@@ -21,6 +21,7 @@ This document defines the file-based, LLM-first task system for the Meridian mul
 - Owns: code review, architecture review, regression risk detection, scanner triage, technical debt creation
 - Reviews Fatih's work before merge
 - Consumes GitHub Dependabot and other security signals, then turns real findings into tasks instead of flooding the backlog with raw alerts
+- Consumes Hermes-generated review-signal reports when a task enters `review/`
 
 ## Source of Truth
 
@@ -79,8 +80,9 @@ Default flow:
 3. Philip moves a clear task to `tasks/ready/`.
 4. Fatih moves the task to `tasks/in_progress/` when implementation starts.
 5. Fatih updates implementation notes and moves it to `tasks/review/`.
-6. Matthew reviews it.
-7. Matthew either:
+6. Hermes may trigger backend/frontend quality and security scans and attach the output as review evidence.
+7. Matthew reviews it.
+8. Matthew either:
 - returns it to `tasks/in_progress/` with review notes
 - moves it to `tasks/done/`
 - creates linked debt or follow-up tasks if needed

@@ -35,6 +35,7 @@ from hermes_cli.meridian_workflow import (
     locate_task,
 )
 from hermes_cli.config import load_config
+from hermes_cli.meridian_quality import latest_quality_result, run_quality_gate_once, format_quality_status
 from hermes_utils import atomic_json_write
 
 
@@ -872,6 +873,15 @@ def _print_status(snapshot: dict[str, Any]) -> None:
         )
         if first.get("reason"):
             print(f"  Why now:        {first['reason']}")
+    active_task_id = snapshot.get("active_task_id")
+    if active_task_id:
+        quality_result = latest_quality_result(active_task_id)
+        if quality_result:
+            print(
+                "  Review signals: "
+                f"{quality_result.get('status')} "
+                f"({quality_result.get('summary')})"
+            )
     worker_leases = snapshot.get("worker_leases") or []
     if worker_leases:
         print(f"  Active leases:  {len(worker_leases)}")
@@ -1029,6 +1039,7 @@ def run_meridian_go_loop(
             passes += 1
             reconcile_meridian(workspace_path)
             snapshot = dispatch_meridian(workspace_path)
+            quality_run = run_quality_gate_once(workspace_path)
 
             snapshot_version = build_snapshot_version(snapshot)
             dispatched_actions = snapshot.get("last_dispatch_results", {}).get("dispatched_actions", [])
@@ -1042,12 +1053,15 @@ def run_meridian_go_loop(
                 or snapshot.get("dispatch_blocked_reason") == "orchestrator_lease_active"
                 or snapshot_version != last_snapshot_version
                 or dispatch_signature != last_dispatch_signature
+                or bool(quality_run.get("count"))
             )
 
             if should_report:
                 print(f"\nPass {passes}")
                 _print_status(snapshot)
                 _print_dispatch_summary(snapshot)
+                if quality_run.get("count"):
+                    print(f"  Review signals: processed {quality_run['count']} scan trigger(s)")
 
             if once:
                 return 0
@@ -1115,6 +1129,27 @@ def meridian_command(args) -> int:
             print("Error: meridian history requires a task id.")
             return 1
         _print_task_history(workspace, task_id)
+        return 0
+
+    if subcommand == "quality":
+        task_id = getattr(args, "task_id", None)
+        should_run = bool(getattr(args, "run", False)) or bool(getattr(args, "force", False))
+        if should_run:
+            result = run_quality_gate_once(
+                workspace,
+                task_id=task_id,
+                force=bool(getattr(args, "force", False)),
+            )
+            if result.get("count"):
+                for item in result.get("scanned", []):
+                    print(
+                        f"Scanned {item.get('task_id')}: {item.get('status')} | "
+                        f"{item.get('summary')} | {item.get('report_path')}"
+                    )
+            else:
+                print("No new review-triggered quality scans were needed.")
+            return 0
+        print(format_quality_status(task_id))
         return 0
 
     snapshot = persist_meridian_snapshot(

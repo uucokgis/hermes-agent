@@ -4538,6 +4538,31 @@ For more help on a command:
         help="Workspace root containing the tasks/ directory (default: auto-discover Meridian workspace)",
     )
 
+    meridian_quality = meridian_subparsers.add_parser(
+        "quality",
+        help="Show or run Meridian review-signal quality scans",
+    )
+    meridian_quality.add_argument(
+        "--workspace",
+        default=None,
+        help="Workspace root containing the Meridian checkout (default: auto-discover or SSH workspace)",
+    )
+    meridian_quality.add_argument(
+        "--task-id",
+        default=None,
+        help="Force a scan for a specific task id or show that task's latest quality result",
+    )
+    meridian_quality.add_argument(
+        "--run",
+        action="store_true",
+        help="Process new review-triggered quality scans now",
+    )
+    meridian_quality.add_argument(
+        "--force",
+        action="store_true",
+        help="Force a scan even if no new review event was observed",
+    )
+
     meridian_parser.set_defaults(func=cmd_meridian)
 
     # =========================================================================

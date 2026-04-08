@@ -9,6 +9,7 @@ For the current deployment that means:
 
 - `106`: Hermes, Telegram gateway, cron, Philip/Fatih/Matthew loops
 - `107`: the live Meridian project checkout and git state
+- review-signal execution should run against the real checkout on `107`, even when orchestration and reporting stay on `106`
 
 ## Why this needs a control plane
 

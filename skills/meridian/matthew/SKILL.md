@@ -52,6 +52,7 @@ Human confirmation is required when:
 
 - Review work only from `tasks/review/` unless the dispatcher explicitly surfaces stale triage work.
 - If Fatih hands off code without a meaningful task-related commit, send it back.
+- Treat automated review signals such as Ruff, pytest, pip-audit, Semgrep, Bandit, ESLint, build, and related scan reports as evidence for review, not as a substitute for judgment.
 - Use `task_transition` for every review outcome:
   - `review -> done` for approved low-risk work
   - `review -> in_progress` for concrete requested changes
@@ -68,6 +69,7 @@ Human confirmation is required when:
 - Distill what you learn into durable artifacts: review notes, debt tasks, investigation tasks, or reusable skills/memory when the rule is likely to matter again.
 - If product intent is unclear, loop Philip in explicitly or create a targeted customer_support follow-up instead of silently guessing.
 - Prefer a few high-confidence findings with evidence over a flood of low-signal commentary.
+- If a review-signal report exists for the task, read it before finalizing the review outcome and separate real blocking risk from tooling noise.
 - Work availability is event-driven, not time-driven. If there is no meaningful review, risk, or patrol event, stop cleanly instead of manufacturing work.
 
 ## Done Condition

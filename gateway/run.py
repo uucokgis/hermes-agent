@@ -3504,6 +3504,7 @@ class GatewayRunner:
         return "\n".join(lines)
 
     def _meridian_task_detail(self, task_id: str) -> str:
+        from hermes_cli.meridian_quality import quality_brief_for_task
         from hermes_cli.meridian_support import resolve_support_workspace
         from hermes_cli.meridian_workflow import locate_task
 
@@ -3527,6 +3528,9 @@ class GatewayRunner:
             lines.append(f"Blocked reason: {metadata.get('blocked_reason')}")
         if metadata.get("updated_at"):
             lines.append(f"Updated: {str(metadata.get('updated_at'))[:19].replace('T', ' ')}")
+        quality_brief = quality_brief_for_task(document.task_id)
+        if quality_brief:
+            lines.extend(["", quality_brief])
         if history:
             lines.extend(["", "**Recent history**"])
             for item in history[-4:]:
