@@ -139,6 +139,16 @@ Meridian has two distinct kinds of work:
 
 Philip should not be starved just because delivery has an old `in_progress` task.
 
+### 6. Small-context work beats giant-context work
+
+The orchestration model should assume:
+- smaller, well-shaped tasks
+- fresh reading of relevant files
+- explicit handoff artifacts
+
+It should not assume one agent keeps the whole repository in memory for long stretches.
+Large context windows may be available, but they are not the primary coordination mechanism.
+
 ## Canonical State Model
 
 ### Queue State
@@ -208,6 +218,14 @@ It must not become the main source of task truth.
    - returns it to `in_progress/`
    - escalates it to `waiting_human`
    - creates linked `debt/` or follow-up tasks
+
+### Role Purity
+
+- Philip owns intake, shaping, prioritization, and handoff quality.
+- Fatih owns implementation and verification.
+- Matthew owns review, architectural judgment, and security/risk evaluation.
+- In a shared checkout, only Fatih should write production code during the normal flow.
+- Parallel coding is an opt-in exception that requires disjoint ownership, not a default behavior.
 
 ### Debt Flow
 

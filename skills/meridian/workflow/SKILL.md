@@ -32,7 +32,7 @@ Do not create hourly loops for immediate work.
 - New user work enters through **Philip first** by default.
 - Treat Philip as the default human-facing Meridian persona.
 - If a Meridian-related request comes from Telegram or another async inbox and does not require an immediate synchronous answer, record it into `customer_support/` first so Philip can process it later.
-- Use **sequential handoff**, not parallel delegation.
+- Use **sequential handoff** as the default. Parallel work is allowed only when file ownership and subsystem boundaries are clearly disjoint.
 - Only wake the next persona when the task state requires it.
 - Prefer the existing Meridian task system over ad-hoc status tracking.
 - Treat `customer_support/` as a durable inbox outside the delivery queues. It is not a replacement for `tasks/`; it is the human-request mailbox Philip checks between backlog passes.
@@ -41,6 +41,7 @@ Do not create hourly loops for immediate work.
   - `task_transition` for queue/state changes
 - Do not treat raw file moves as the primary workflow API.
 - If no meaningful next action exists, stop and report status instead of looping.
+- Optimize for small, composable task packets over giant context-heavy assignments.
 
 ## Persona Loading
 
@@ -70,6 +71,7 @@ Wake Fatih only when:
 Fatih should not start unrelated work while a review/request-changes loop is active.
 Fatih should claim work explicitly before `ready -> in_progress`.
 Fatih should create meaningful task-related commits before handing work to review.
+Fatih should usually be the only persona writing production code in a shared checkout.
 
 ### 3. Review
 
@@ -84,6 +86,16 @@ If Matthew requests changes:
 If Matthew approves:
 - merge only when the work is low-risk and within the contextual merge policy
 - otherwise transition the task to `waiting_human`
+
+## Context Budget Policy
+
+- Do not use very large context windows as the default operating mode for Meridian workflow.
+- Prefer focused task packets plus fresh reads of the relevant files.
+- Recommended local coding budget:
+  - normal implementation/review loop: `32k`
+  - larger cross-file work: `48k` to `64k`
+  - `128k`-class context only for explicit repo exploration or synthesis passes
+- Bigger context is not a substitute for clean task decomposition. If a task seems to require "the whole repo," reshape the task before increasing context.
 
 ## Priority of Work
 
@@ -112,6 +124,7 @@ Night patrol is separate from the immediate work pipeline.
 - If all personas point at one live project checkout, parallel code editing is unsafe.
 - In that configuration, only Fatih should write production code. Philip and Matthew stay read-heavy and mostly edit planning, task, debt, and support artifacts.
 - The long-term safer model is: shared control plane for `tasks/` and `customer_support/`, plus isolated code worktrees or branches per writing persona.
+- If parallel implementation is needed later, split work by explicit ownership such as frontend vs backend, or by fully disjoint files. Never rely on "they will probably stay out of each other's way."
 
 ## Efficiency Rules
 
