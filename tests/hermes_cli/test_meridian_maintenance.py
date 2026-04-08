@@ -67,6 +67,19 @@ def test_classify_review_artifact_uses_filename_heuristics(tmp_path):
     assert classify_review_artifact(path) == "decision"
 
 
+def test_classify_review_artifact_maps_summary_and_specs_to_archive(tmp_path):
+    summary = tmp_path / "review" / "MATTHEW-20260407-FINAL-SUMMARY.md"
+    spec_file = tmp_path / "review" / "map-selection.spec.ts"
+    readme = tmp_path / "review" / "README.md"
+    _write_task(summary, {})
+    _write_task(spec_file, {})
+    _write_task(readme, {})
+
+    assert classify_review_artifact(summary) == "archive"
+    assert classify_review_artifact(spec_file) == "archive"
+    assert classify_review_artifact(readme) == "archive"
+
+
 def test_migrate_in_progress_queue_moves_and_cleans_duplicates(tmp_path):
     workspace = tmp_path / "workspace"
     legacy = workspace / "tasks" / "in-progress"

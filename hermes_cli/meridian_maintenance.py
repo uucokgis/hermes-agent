@@ -26,6 +26,27 @@ REVIEW_CATEGORY_DIRECTORIES = {
     "patrol": "patrol",
     "archive": "archive",
 }
+DECISION_FILENAME_MARKERS = (
+    "APPROVAL",
+    "APPROVED",
+    "REQUEST-CHANGES",
+    "REQUEST_CHANGES",
+    "DECISION",
+    "REVIEW",
+    "FINDINGS",
+)
+ARCHIVE_FILENAME_MARKERS = (
+    "SUMMARY",
+    "STATUS",
+    "UPDATE",
+    "TRANSITION",
+    "COMPLETION",
+    "COMPLETE",
+    "COMPLETED",
+    "IMPLEMENTED",
+    "IMPLEMENTATION_COMPLETE",
+    "IMPLEMENTATION_SUMMARY",
+)
 
 
 @dataclass(frozen=True)
@@ -157,6 +178,27 @@ REVIEW_CATEGORY_DIRECTORIES = {
     "patrol": "patrol",
     "archive": "archive",
 }
+DECISION_FILENAME_MARKERS = (
+    "APPROVAL",
+    "APPROVED",
+    "REQUEST-CHANGES",
+    "REQUEST_CHANGES",
+    "DECISION",
+    "REVIEW",
+    "FINDINGS",
+)
+ARCHIVE_FILENAME_MARKERS = (
+    "SUMMARY",
+    "STATUS",
+    "UPDATE",
+    "TRANSITION",
+    "COMPLETION",
+    "COMPLETE",
+    "COMPLETED",
+    "IMPLEMENTED",
+    "IMPLEMENTATION_COMPLETE",
+    "IMPLEMENTATION_SUMMARY",
+)
 
 def read_text(path):
     try:
@@ -193,17 +235,22 @@ def classify_review_artifact(path):
     name = path.name.upper()
     status = str(metadata.get("status") or "").strip().lower()
     review_kind = str(metadata.get("review_kind") or "").strip().lower()
+    suffix = "".join(path.suffixes).lower()
     if review_kind:
         if review_kind == "decision":
             return "decision"
         if review_kind == "patrol":
             return "patrol"
+    if any(fragment in name for fragment in DECISION_FILENAME_MARKERS):
+        return "decision"
     if status in {"archived", "superseded"}:
         return "archive"
-    if any(fragment in name for fragment in ("APPROVAL", "REQUEST-CHANGES", "REQUEST_CHANGES", "DECISION", "REVIEW")):
-        return "decision"
     if "PATROL" in name:
         return "patrol"
+    if path.name.lower() == "readme.md" or suffix in {".spec.ts", ".spec.tsx"}:
+        return "archive"
+    if any(fragment in name for fragment in ARCHIVE_FILENAME_MARKERS):
+        return "archive"
     if metadata.get("id"):
         return "active"
     return "unknown"
@@ -436,14 +483,19 @@ def classify_review_artifact(path: Path) -> str:
     name = path.name.upper()
     status = str(metadata.get("status") or "").strip().lower()
     review_kind = str(metadata.get("review_kind") or "").strip().lower()
+    suffix = "".join(path.suffixes).lower()
     if is_review_decision_artifact(path, metadata):
+        return "decision"
+    if any(fragment in name for fragment in DECISION_FILENAME_MARKERS):
         return "decision"
     if review_kind == "patrol" or "PATROL" in name:
         return "patrol"
     if status in {"archived", "superseded"}:
         return "archive"
-    if any(fragment in name for fragment in ("APPROVAL", "REQUEST-CHANGES", "DECISION", "REVIEW")):
-        return "decision"
+    if path.name.lower() == "readme.md" or suffix in {".spec.ts", ".spec.tsx"}:
+        return "archive"
+    if any(fragment in name for fragment in ARCHIVE_FILENAME_MARKERS):
+        return "archive"
     if metadata.get("id"):
         return "active"
     return "unknown"
