@@ -12,8 +12,6 @@ PASS_TIMEOUT_SECONDS="${HERMES_MERIDIAN_PASS_TIMEOUT_SECONDS:-900}"
 MODEL_LOCK_FILE="${HERMES_MERIDIAN_MODEL_LOCK_FILE:-$HOME/.hermes/meridian/loops/model-provider.lock}"
 STARTUP_JITTER_SECONDS="${HERMES_MERIDIAN_STARTUP_JITTER_SECONDS:-15}"
 REVIEW_PRIORITY_THRESHOLD="${HERMES_MERIDIAN_REVIEW_PRIORITY_THRESHOLD:-2}"
-REVIEW_PRIORITY_DURATION_SECONDS="${HERMES_MERIDIAN_REVIEW_PRIORITY_DURATION_SECONDS:-7200}"
-REVIEW_PRIORITY_STATE_FILE="${HERMES_MERIDIAN_REVIEW_PRIORITY_STATE_FILE:-$HOME/.hermes/meridian/review-priority-until.txt}"
 REVIEW_PRIORITY_MATTHEW_SLEEP="${HERMES_MERIDIAN_REVIEW_PRIORITY_MATTHEW_SLEEP:-60}"
 REVIEW_PRIORITY_FATIH_SLEEP="${HERMES_MERIDIAN_REVIEW_PRIORITY_FATIH_SLEEP:-900}"
 REVIEW_PRIORITY_PHILIP_SLEEP="${HERMES_MERIDIAN_REVIEW_PRIORITY_PHILIP_SLEEP:-1800}"
@@ -83,81 +81,13 @@ role_default_sleep() {
   esac
 }
 
-role_default_window() {
-  case "$1" in
-    philip) echo "always" ;;
-    fatih) echo "always" ;;
-    matthew) echo "always" ;;
-    *)
-      echo "Unknown role: $1" >&2
-      exit 1
-      ;;
-  esac
-}
-
-role_window() {
-  local role_upper env_name value
-  role_upper="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
-  env_name="HERMES_MERIDIAN_WINDOW_${role_upper}"
-  value="${!env_name:-}"
-  if [[ -n "$value" ]]; then
-    echo "$value"
-    return
-  fi
-  role_default_window "$1"
-}
-
 role_local_clock() {
   TZ="$TIMEZONE_NAME" date '+%Y-%m-%d %H:%M:%S %Z'
 }
 
-window_status() {
-  local window="$1"
-  local now_h now_m start_h start_m end_h end_m
-  local now_minutes start_minutes end_minutes
-
-  if [[ ! "$window" =~ ^([0-2][0-9]):([0-5][0-9])-([0-2][0-9]):([0-5][0-9])$ ]]; then
-    echo "inside"
-    return
-  fi
-
-  now_h="$(TZ="$TIMEZONE_NAME" date '+%H')"
-  now_m="$(TZ="$TIMEZONE_NAME" date '+%M')"
-  start_h="${BASH_REMATCH[1]}"
-  start_m="${BASH_REMATCH[2]}"
-  end_h="${BASH_REMATCH[3]}"
-  end_m="${BASH_REMATCH[4]}"
-
-  now_minutes=$((10#$now_h * 60 + 10#$now_m))
-  start_minutes=$((10#$start_h * 60 + 10#$start_m))
-  end_minutes=$((10#$end_h * 60 + 10#$end_m))
-
-  if (( start_minutes == end_minutes )); then
-    echo "inside"
-    return
-  fi
-
-  if (( start_minutes < end_minutes )); then
-    if (( now_minutes >= start_minutes && now_minutes < end_minutes )); then
-      echo "inside"
-    else
-      echo "outside"
-    fi
-    return
-  fi
-
-  if (( now_minutes >= start_minutes || now_minutes < end_minutes )); then
-    echo "inside"
-  else
-    echo "outside"
-  fi
-}
-
 build_prompt() {
   local role="$1"
-  local window status local_clock
-  window="$(role_window "$role")"
-  status="$(window_status "$window")"
+  local local_clock
   local_clock="$(role_local_clock)"
 
   case "$role" in
@@ -170,10 +100,8 @@ Operate only on the Meridian coordination workspace at $WORKSPACE.
 Scheduling contract:
 - local time zone: $TIMEZONE_NAME
 - current local time: $local_clock
-- your normal work window: $window
-- current window state: $status
 
-Window policy:
+Execution model:
 - you are always on; treat availability as event-driven rather than clock-driven
 - do not invent work just because you are awake
 - when no meaningful event exists, stop cleanly and wait for the next pass
@@ -223,10 +151,8 @@ Operate only on the Meridian coordination workspace at $WORKSPACE.
 Scheduling contract:
 - local time zone: $TIMEZONE_NAME
 - current local time: $local_clock
-- your normal work window: $window
-- current window state: $status
 
-Window policy:
+Execution model:
 - you are always on; treat availability as event-driven rather than clock-driven
 - only work when there is a real implementation event: a ready task or an active request-changes loop
 - if there is no real implementation event, stop cleanly instead of inventing work
@@ -269,10 +195,8 @@ Operate only on the Meridian coordination workspace at $WORKSPACE.
 Scheduling contract:
 - local time zone: $TIMEZONE_NAME
 - current local time: $local_clock
-- your normal work window: $window
-- current window state: $status
 
-Window policy:
+Execution model:
 - you are always on; treat availability as event-driven rather than clock-driven
 - review, risk, or support clarification events can wake you at any time
 - if there is no meaningful review or patrol event, stop cleanly and wait for the next pass
@@ -429,50 +353,27 @@ review_request_changes_count() {
   remote_exec "grep -RIl '^review_outcome: request_changes' tasks/review/decisions 2>/dev/null | wc -l" 2>/dev/null | tr -dc '0-9'
 }
 
-review_priority_until_epoch() {
-  if [[ ! -f "$REVIEW_PRIORITY_STATE_FILE" ]]; then
-    echo 0
-    return
-  fi
-  tr -dc '0-9' < "$REVIEW_PRIORITY_STATE_FILE"
-}
-
-set_review_priority_until_epoch() {
-  local epoch="$1"
-  mkdir -p "$(dirname "$REVIEW_PRIORITY_STATE_FILE")"
-  printf '%s\n' "$epoch" > "$REVIEW_PRIORITY_STATE_FILE"
-}
-
-refresh_review_priority_window() {
-  local now active_count request_changes until
-  now="$(date +%s)"
+review_focus_mode() {
+  local active_count request_changes
   active_count="$(review_active_count)"
   active_count="${active_count:-0}"
   request_changes="$(review_request_changes_count)"
   request_changes="${request_changes:-0}"
-  until="$(review_priority_until_epoch)"
-  until="${until:-0}"
 
-  if [[ "$active_count" =~ ^[0-9]+$ ]] && [[ "$request_changes" =~ ^[0-9]+$ ]]; then
-    if (( active_count == 0 && request_changes == 0 )); then
-      until=0
-      set_review_priority_until_epoch "$until"
-    fi
+  if [[ "$request_changes" =~ ^[0-9]+$ ]] && (( request_changes > 0 )); then
+    echo 1
+    return
   fi
 
   if [[ "$active_count" =~ ^[0-9]+$ ]] && (( active_count >= REVIEW_PRIORITY_THRESHOLD )); then
-    until=$(( now + REVIEW_PRIORITY_DURATION_SECONDS ))
-    set_review_priority_until_epoch "$until"
+    echo 1
+    return
   fi
 
-  if (( until > now )); then
-    echo 1
-  else
-    echo 0
-  fi
+  echo 0
 }
 
-should_run_pass_in_priority_window() {
+should_run_pass_in_review_focus() {
   local role="$1"
   if [[ "$role" == "matthew" ]]; then
     echo 1
@@ -536,20 +437,20 @@ if [[ "$STARTUP_JITTER_SECONDS" =~ ^[0-9]+$ ]] && (( STARTUP_JITTER_SECONDS > 0 
 fi
 
 while true; do
-  IN_PRIORITY_WINDOW="$(refresh_review_priority_window)"
-  CURRENT_SLEEP_SECONDS="$(role_sleep_seconds_for_current_mode "$ROLE" "$IN_PRIORITY_WINDOW")"
+  IN_REVIEW_FOCUS_MODE="$(review_focus_mode)"
+  CURRENT_SLEEP_SECONDS="$(role_sleep_seconds_for_current_mode "$ROLE" "$IN_REVIEW_FOCUS_MODE")"
   echo "=== $(date -Is) [$ROLE] profile=$PROFILE workspace=$WORKSPACE ==="
-  if [[ "$IN_PRIORITY_WINDOW" == "1" ]]; then
-    echo "[$ROLE] review priority window active"
+  if [[ "$IN_REVIEW_FOCUS_MODE" == "1" ]]; then
+    echo "[$ROLE] review focus mode active"
   fi
   if [[ "$ROLE" == "matthew" ]]; then
     "$HERMES_BIN" -p "$PROFILE" meridian quality --run --workspace "$WORKSPACE" || true
   fi
-  if [[ "$IN_PRIORITY_WINDOW" == "1" ]]; then
-    if [[ "$(should_run_pass_in_priority_window "$ROLE")" == "1" ]]; then
+  if [[ "$IN_REVIEW_FOCUS_MODE" == "1" ]]; then
+    if [[ "$(should_run_pass_in_review_focus "$ROLE")" == "1" ]]; then
       run_serialized_chat_pass 1 || true
     else
-      echo "[$ROLE] skipping pass during Matthew priority window"
+      echo "[$ROLE] skipping pass during review focus mode"
     fi
   else
     run_serialized_chat_pass 0 || true
