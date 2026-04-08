@@ -285,9 +285,13 @@ if [[ -z "$SLEEP_SECONDS" ]]; then
 fi
 
 export HERMES_MERIDIAN_WORKSPACE="$WORKSPACE"
+export HERMES_MERIDIAN_QUALITY_WORKSPACE="${HERMES_MERIDIAN_QUALITY_WORKSPACE:-$WORKSPACE}"
 
 while true; do
   echo "=== $(date -Is) [$ROLE] profile=$PROFILE workspace=$WORKSPACE ==="
+  if [[ "$ROLE" == "matthew" ]]; then
+    "$HERMES_BIN" -p "$PROFILE" meridian quality --run --workspace "$WORKSPACE" || true
+  fi
   "$HERMES_BIN" -p "$PROFILE" chat --quiet --yolo --max-turns 40 -q "$(build_prompt "$ROLE")"
   sleep "$SLEEP_SECONDS"
 done

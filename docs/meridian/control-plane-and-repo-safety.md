@@ -11,6 +11,11 @@ For the current deployment that means:
 - `107`: the live Meridian project checkout and git state
 - review-signal execution should run against the real checkout on `107`, even when orchestration and reporting stay on `106`
 
+Practical rule:
+
+- trigger and reporting may live on `106`
+- source code scans, build checks, and dependency/security checks should target the real checkout on `107`
+
 ## Why this needs a control plane
 
 If three personas all point at one live project checkout, two different concerns get mixed together:

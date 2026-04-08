@@ -48,6 +48,27 @@ Separate agents on the same VM fix the coordination problem without adding the c
 If the real Meridian repo lives on another machine such as `107`, the role profiles should use an SSH terminal backend and point at that machine deliberately.
 Do not assume the repo exists on `106` just because Hermes is running there.
 
+### Recommended environment for split 106/107 setup
+
+On `106`, keep the role profiles and gateway pointed at the project machine:
+
+```bash
+export TERMINAL_SSH_HOST=192.168.1.107
+export TERMINAL_SSH_USER=umut
+export TERMINAL_SSH_KEY=~/.ssh/id_ed25519
+export HERMES_MERIDIAN_WORKSPACE=/home/umut/meridian
+
+# Optional explicit review-signal overrides
+export HERMES_MERIDIAN_QUALITY_SSH_HOST=192.168.1.107
+export HERMES_MERIDIAN_QUALITY_SSH_USER=umut
+export HERMES_MERIDIAN_QUALITY_SSH_KEY=~/.ssh/id_ed25519
+export HERMES_MERIDIAN_QUALITY_WORKSPACE=/home/umut/meridian
+```
+
+The quality gate falls back to the profile SSH terminal settings, but setting the explicit
+`HERMES_MERIDIAN_QUALITY_*` variables makes scan execution intent obvious and avoids drift if
+someone later points a role profile at a different terminal target.
+
 ## Profiles
 
 Use these profile names:
@@ -160,6 +181,10 @@ cd ~/Hermes-Agent
 scripts/meridian-multi-agent.sh start
 ```
 
+Matthew's loop now drains Meridian review-signal scans before each review pass, so tasks that
+enter `review/` on `107` produce shared evidence for Matthew and Fatih without needing a fourth
+always-on agent.
+
 ### Check status
 
 ```bash
@@ -202,6 +227,13 @@ Why both:
 
 - gateway carries Telegram + cron
 - loops are plain background shell processes and otherwise keep running old code/state
+
+If you change SSH or quality-gate environment variables on `106`, restart the Meridian loops too:
+
+```bash
+cd ~/Hermes-Agent
+scripts/meridian-multi-agent.sh restart
+```
 
 ## Daily report expectation
 

@@ -495,6 +495,113 @@ def _review_events(events: list[dict[str, Any]], state: dict[str, Any]) -> list[
     return selected
 
 
+def _parse_task_frontmatter(content: str) -> dict[str, Any]:
+    if content.startswith("---\n"):
+        closing = content.find("\n---\n", 4)
+        if closing != -1:
+            raw = content[4:closing]
+            try:
+                import yaml
+
+                payload = yaml.safe_load(raw) or {}
+            except Exception:
+                return {}
+            return payload if isinstance(payload, dict) else {}
+    return {}
+
+
+def _local_review_candidates(workspace: str) -> list[dict[str, str]]:
+    review_dir = Path(workspace) / "tasks" / "review"
+    if not review_dir.exists():
+        return []
+    candidates: list[dict[str, str]] = []
+    for path in sorted(review_dir.iterdir()):
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        try:
+            metadata = _parse_task_frontmatter(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        candidates.append(
+            {
+                "task_id": str(metadata.get("id") or path.stem),
+                "transition_at": str(metadata.get("last_transition_at") or metadata.get("updated_at") or ""),
+            }
+        )
+    return candidates
+
+
+def _ssh_review_candidates(executor: Executor) -> list[dict[str, str]]:
+    script = """
+import json
+from pathlib import Path
+import yaml
+
+workspace = Path(__WORKSPACE__).expanduser()
+review_dir = workspace / "tasks" / "review"
+payload = []
+if review_dir.exists():
+    for path in sorted(review_dir.iterdir()):
+        if not path.is_file() or path.name.startswith('.'):
+            continue
+        try:
+            content = path.read_text(encoding='utf-8')
+        except OSError:
+            continue
+        metadata = {}
+        if content.startswith('---\\n'):
+            closing = content.find('\\n---\\n', 4)
+            if closing != -1:
+                loaded = yaml.safe_load(content[4:closing]) or {}
+                if isinstance(loaded, dict):
+                    metadata = loaded
+        payload.append({
+            'task_id': str(metadata.get('id') or path.stem),
+            'transition_at': str(metadata.get('last_transition_at') or metadata.get('updated_at') or ''),
+        })
+print(json.dumps(payload, ensure_ascii=False))
+""".replace("__WORKSPACE__", repr(executor.workspace))
+    result = _run_command(
+        executor,
+        f"python3 - <<'PY'\n{script}\nPY",
+        cwd=executor.workspace,
+        timeout=45,
+    )
+    if result.returncode != 0:
+        return []
+    try:
+        payload = json.loads(result.stdout.strip() or "[]")
+    except json.JSONDecodeError:
+        return []
+    candidates: list[dict[str, str]] = []
+    for item in payload:
+        if isinstance(item, dict) and item.get("task_id"):
+            candidates.append(
+                {
+                    "task_id": str(item.get("task_id")),
+                    "transition_at": str(item.get("transition_at") or ""),
+                }
+            )
+    return candidates
+
+
+def _review_candidates_from_workspace(executor: Executor) -> list[dict[str, str]]:
+    if executor.mode == "ssh":
+        return _ssh_review_candidates(executor)
+    return _local_review_candidates(executor.workspace)
+
+
+def _needs_rescan(task_id: str, transition_at: str, state: dict[str, Any]) -> bool:
+    result = state.get("results", {}).get(task_id)
+    if not isinstance(result, dict):
+        return True
+    scanned_at = parse_iso_datetime(result.get("scanned_at"))
+    transitioned_at = parse_iso_datetime(transition_at)
+    if transitioned_at and scanned_at:
+        return scanned_at < transitioned_at
+    return False
+
+
 def run_quality_gate_once(
     workspace: str | Path | None = None,
     *,
@@ -516,6 +623,20 @@ def run_quality_gate_once(
 
     events = _new_events(state)
     review_events = _review_events(events, state)
+    if not task_id:
+        for candidate in _review_candidates_from_workspace(executor):
+            if not _needs_rescan(candidate["task_id"], candidate.get("transition_at", ""), state):
+                continue
+            if any(item.get("task_id") == candidate["task_id"] for item in review_events):
+                continue
+            review_events.append(
+                {
+                    "id": "",
+                    "task_id": candidate["task_id"],
+                    "type": "review_queue_detected",
+                    "transition_at": candidate.get("transition_at", ""),
+                }
+            )
     if force and not review_events:
         last_review_task = None
         for event in reversed(events):
