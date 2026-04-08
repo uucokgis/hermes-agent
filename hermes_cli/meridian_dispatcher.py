@@ -36,6 +36,7 @@ from hermes_cli.meridian_workflow import (
 )
 from hermes_cli.config import load_config
 from hermes_cli.meridian_quality import latest_quality_result, run_quality_gate_once, format_quality_status
+from hermes_cli.meridian_review import latest_review_decision
 from hermes_utils import atomic_json_write
 
 
@@ -348,6 +349,7 @@ def _build_planned_actions(
     review_loop_task_id: str | None,
     waiting_human: bool,
     policy_window: str,
+    review_decision: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
     stale_entries = _detect_stale_tasks(queues, now=now)
@@ -373,15 +375,42 @@ def _build_planned_actions(
     )
     if review_task:
         stale = stale_by_task.get(review_task.task_id)
+        review_outcome = str((review_decision or {}).get("review_outcome") or "").strip().lower()
+        review_status = str((review_decision or {}).get("status") or "").strip().lower()
+        review_is_final = review_status == "final"
+        review_actor = "matthew"
+        review_kind = "review_task" if not stale else "triage_stale_review"
+        review_reason = stale["reason"] if stale else "review_queue_non_empty"
+        review_dispatchable = True
+        if review_is_final and review_outcome == "request_changes":
+            review_actor = "fatih"
+            review_kind = "address_review_changes"
+            review_reason = "review_decision_request_changes"
+            review_dispatchable = not waiting_human
+        elif review_is_final and review_outcome == "approved":
+            review_actor = "matthew"
+            review_kind = "finalize_review_approval"
+            review_reason = "review_decision_approved"
+        elif review_is_final and review_outcome == "debt_only":
+            review_actor = "matthew"
+            review_kind = "finalize_review_with_debt"
+            review_reason = "review_decision_debt_only"
+        elif review_is_final and review_outcome in {"blocked", "needs_human"}:
+            review_actor = "human"
+            review_kind = "await_human_review_resolution"
+            review_reason = "review_decision_needs_human"
+            review_dispatchable = False
         actions.append(
             {
-                "kind": "review_task" if not stale else "triage_stale_review",
-                "actor": "matthew",
+                "kind": review_kind,
+                "actor": review_actor,
                 "task_id": review_task.task_id,
                 "queue": "review",
-                "reason": stale["reason"] if stale else "review_queue_non_empty",
-                "dispatchable": True,
+                "reason": review_reason,
+                "dispatchable": review_dispatchable,
                 "stale": bool(stale),
+                "review_outcome": review_outcome or None,
+                "review_status": review_status or None,
             }
         )
 
@@ -590,6 +619,7 @@ def collect_meridian_snapshot(
     waiting_human_task = _pick_first(queues["waiting_human"])
     waiting_human = bool(waiting_human_task)
     stale_tasks = _detect_stale_tasks(queues, now=current_time)
+    review_decision = latest_review_decision(review_loop_task_id, workspace_path) if review_loop_task_id else None
     planned_actions = _build_planned_actions(
         queues,
         state=state,
@@ -598,6 +628,7 @@ def collect_meridian_snapshot(
         review_loop_task_id=review_loop_task_id,
         waiting_human=waiting_human,
         policy_window=policy_window,
+        review_decision=review_decision.metadata if review_decision else None,
     )
 
     active_persona = "idle"
@@ -649,6 +680,7 @@ def collect_meridian_snapshot(
         "waiting_human": waiting_human,
         "review_loop_task_id": review_loop_task_id,
         "current_branch": active_task.branch if active_task else None,
+        "review_decision": dict(review_decision.metadata) if review_decision else None,
         "ready_target": ready_target,
         "policy_window": policy_window,
         "planned_actions": planned_actions,
@@ -667,6 +699,7 @@ def persist_meridian_snapshot(snapshot: dict[str, Any], *, previous_state: dict[
         "waiting_on",
         "waiting_human",
         "review_loop_task_id",
+        "review_decision",
         "current_branch",
         "planned_actions",
         "stale_tasks",
@@ -882,6 +915,13 @@ def _print_status(snapshot: dict[str, Any]) -> None:
                 f"{quality_result.get('status')} "
                 f"({quality_result.get('summary')})"
             )
+        review_decision = snapshot.get("review_decision")
+        if isinstance(review_decision, dict):
+            print(
+                "  Review decision: "
+                f"{review_decision.get('review_outcome') or '-'} "
+                f"({review_decision.get('decision_bucket') or '-'})"
+            )
     worker_leases = snapshot.get("worker_leases") or []
     if worker_leases:
         print(f"  Active leases:  {len(worker_leases)}")
@@ -1039,7 +1079,10 @@ def run_meridian_go_loop(
             passes += 1
             reconcile_meridian(workspace_path)
             snapshot = dispatch_meridian(workspace_path)
-            quality_run = run_quality_gate_once(workspace_path)
+            quality_run = run_quality_gate_once(
+                workspace_path,
+                state_path=STATE_PATH.with_name("quality_gate_state.json"),
+            )
 
             snapshot_version = build_snapshot_version(snapshot)
             dispatched_actions = snapshot.get("last_dispatch_results", {}).get("dispatched_actions", [])

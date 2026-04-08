@@ -34,6 +34,27 @@ def _make_workspace(tmp_path: Path) -> Path:
     return workspace
 
 
+def _write_review_decision(path: Path, **overrides) -> None:
+    payload = {
+        "review_schema_version": 1,
+        "review_id": "REVIEW-20260408-001",
+        "review_task_id": "TASK-REVIEW",
+        "review_kind": "decision",
+        "review_outcome": "request_changes",
+        "decision_bucket": "blocking",
+        "reviewer": "matthew",
+        "status": "final",
+        "required_actions": [{"id": "RA-1", "summary": "Fix failing case", "status": "open"}],
+        "updated_at": "2026-04-08T02:00:00+00:00",
+    }
+    payload.update(overrides)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "---\n" + yaml.safe_dump(payload, sort_keys=False).strip() + "\n---\n",
+        encoding="utf-8",
+    )
+
+
 @pytest.fixture(autouse=True)
 def _isolated_meridian_events(tmp_path, monkeypatch):
     from hermes_cli import meridian_runtime as mr
@@ -201,6 +222,7 @@ def test_dispatch_only_suggests_new_wakeups_once_per_transition(tmp_path, monkey
     workspace = _make_workspace(tmp_path)
     state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
     monkeypatch.setattr(md, "STATE_PATH", state_path)
+    monkeypatch.setattr(md, "_local_policy_window", lambda now: "normal")
 
     _write_task(workspace / "tasks" / "ready" / "ready-task.md", "TASK-1")
 
@@ -221,6 +243,7 @@ def test_dispatch_creates_worker_lease_and_idempotency_key(tmp_path, monkeypatch
     workspace = _make_workspace(tmp_path)
     state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
     monkeypatch.setattr(md, "STATE_PATH", state_path)
+    monkeypatch.setattr(md, "_local_policy_window", lambda now: "normal")
     monkeypatch.setattr(mr, "EVENT_LOG_PATH", tmp_path / ".hermes" / "meridian" / "events.jsonl")
 
     _write_task(workspace / "tasks" / "ready" / "ready-task.md", "TASK-1")
@@ -522,6 +545,71 @@ def test_planner_surfaces_stale_review_as_first_class_action(tmp_path, monkeypat
     assert snapshot["planned_actions"][0]["actor"] == "matthew"
 
 
+def test_planner_routes_request_changes_review_back_to_fatih(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+
+    _write_task(workspace / "tasks" / "review" / "active" / "task-review.md", "TASK-REVIEW")
+    _write_review_decision(
+        workspace / "tasks" / "review" / "decisions" / "TASK-REVIEW-decision.md",
+        review_task_id="TASK-REVIEW",
+        review_outcome="request_changes",
+    )
+
+    snapshot = md.collect_meridian_snapshot(workspace)
+
+    assert snapshot["review_decision"]["review_outcome"] == "request_changes"
+    assert snapshot["planned_actions"][0]["kind"] == "address_review_changes"
+    assert snapshot["planned_actions"][0]["actor"] == "fatih"
+    assert snapshot["planned_actions"][0]["reason"] == "review_decision_request_changes"
+
+
+def test_planner_keeps_approved_review_with_matthew_for_finalization(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+
+    _write_task(workspace / "tasks" / "review" / "active" / "task-review.md", "TASK-REVIEW")
+    _write_review_decision(
+        workspace / "tasks" / "review" / "decisions" / "TASK-REVIEW-decision.md",
+        review_task_id="TASK-REVIEW",
+        review_outcome="approved",
+        decision_bucket="passed",
+    )
+
+    snapshot = md.collect_meridian_snapshot(workspace)
+
+    assert snapshot["planned_actions"][0]["kind"] == "finalize_review_approval"
+    assert snapshot["planned_actions"][0]["actor"] == "matthew"
+    assert snapshot["planned_actions"][0]["reason"] == "review_decision_approved"
+
+
+def test_planner_marks_blocked_review_as_human_wait(tmp_path, monkeypatch):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+
+    _write_task(workspace / "tasks" / "review" / "active" / "task-review.md", "TASK-REVIEW")
+    _write_review_decision(
+        workspace / "tasks" / "review" / "decisions" / "TASK-REVIEW-decision.md",
+        review_task_id="TASK-REVIEW",
+        review_outcome="blocked",
+    )
+
+    snapshot = md.collect_meridian_snapshot(workspace)
+
+    assert snapshot["planned_actions"][0]["kind"] == "await_human_review_resolution"
+    assert snapshot["planned_actions"][0]["actor"] == "human"
+    assert snapshot["planned_actions"][0]["dispatchable"] is False
+
+
 def test_planner_respects_dependency_readiness_for_replenishment(tmp_path, monkeypatch):
     from hermes_cli import meridian_dispatcher as md
 
@@ -632,6 +720,7 @@ def test_meridian_command_go_once_runs_single_pass(tmp_path, monkeypatch, capsys
     workspace = _make_workspace(tmp_path)
     state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
     monkeypatch.setattr(md, "STATE_PATH", state_path)
+    monkeypatch.setattr(md, "_local_policy_window", lambda now: "normal")
     _write_task(workspace / "tasks" / "ready" / "ready-task.md", "TASK-1")
 
     rc = md.meridian_command(
