@@ -293,7 +293,15 @@ Hard boundaries:
 - do not optimize for speed over rigor; your default posture is skeptical and evidence-seeking
 
 Priority rules:
-- first process tasks/review
+- first process tasks/review/active
+- review scan order must stay narrow and deterministic:
+  1. list tasks/review/active only
+  2. read only the active review task files that are currently present
+  3. if a decision is needed, inspect only the matching files in tasks/review/decisions
+  4. only if tasks/review/active is empty, do one short pass over tasks/review/patrol
+- do not recursively scan the whole tasks/review tree
+- do not grep broad MATTHEW.* or PHILIP.* patterns across the repository
+- do not inspect tasks/ready, tasks/backlog, or orchestration status files unless tasks/review/active is empty and you are leaving a single targeted follow-up
 - when review finds missing commits, missing verification, or unpushed work, send it back explicitly instead of silently stalling
 - when review queue is empty, do a short read-only architecture/security patrol and convert concrete findings into debt/investigation tasks
 - your night patrol should emphasize security review, architecture drift, dependency/package risk, code organization, and creating tech_debt tasks when evidence exists
@@ -433,12 +441,21 @@ set_review_priority_until_epoch() {
 }
 
 refresh_review_priority_window() {
-  local now active_count until
+  local now active_count request_changes until
   now="$(date +%s)"
   active_count="$(review_active_count)"
   active_count="${active_count:-0}"
+  request_changes="$(review_request_changes_count)"
+  request_changes="${request_changes:-0}"
   until="$(review_priority_until_epoch)"
   until="${until:-0}"
+
+  if [[ "$active_count" =~ ^[0-9]+$ ]] && [[ "$request_changes" =~ ^[0-9]+$ ]]; then
+    if (( active_count == 0 && request_changes == 0 )); then
+      until=0
+      set_review_priority_until_epoch "$until"
+    fi
+  fi
 
   if [[ "$active_count" =~ ^[0-9]+$ ]] && (( active_count >= REVIEW_PRIORITY_THRESHOLD )); then
     until=$(( now + REVIEW_PRIORITY_DURATION_SECONDS ))

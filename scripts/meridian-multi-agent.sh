@@ -10,6 +10,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HERMES_BIN="$ROOT_DIR/venv/bin/hermes"
 ROLE_LOOP="$ROOT_DIR/scripts/meridian-role-loop.sh"
 STATE_DIR="${HOME}/.hermes/meridian/loops"
+SERIALIZE_MODEL_ACCESS="${HERMES_MERIDIAN_SERIALIZE_MODEL_ACCESS:-0}"
 
 mkdir -p "$STATE_DIR"
 
@@ -68,7 +69,8 @@ start_role() {
     rm -f "$pid_file"
   fi
 
-  nohup setsid bash "$ROLE_LOOP" "$role" "$WORKSPACE" >>"$log_file" 2>&1 &
+  nohup setsid env HERMES_MERIDIAN_SERIALIZE_MODEL_ACCESS="$SERIALIZE_MODEL_ACCESS" \
+    bash "$ROLE_LOOP" "$role" "$WORKSPACE" >>"$log_file" 2>&1 &
   pid=$!
   echo "$pid" >"$pid_file"
   echo "Started $role (pid $pid, log $log_file)"
