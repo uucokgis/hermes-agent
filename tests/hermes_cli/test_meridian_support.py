@@ -16,7 +16,11 @@ def _make_workspace(tmp_path: Path) -> Path:
 
 def _touch_task(path: Path, name: str) -> None:
     target = path / name
-    target.write_text("---\nid: task\n---\n", encoding="utf-8")
+    task_id = Path(name).stem
+    target.write_text(
+        f"---\nid: {task_id}\ntitle: Friendly {task_id}\n---\n",
+        encoding="utf-8",
+    )
 
 
 def test_create_and_reply_ticket(tmp_path, monkeypatch):
@@ -122,6 +126,7 @@ def test_build_roles_status_text_includes_workspace_queue_focus_and_commits(tmp_
     text = ms.build_roles_status_text()
 
     assert "backlog=1" in text
+    assert "waiting_human=0" in text
     assert "review=1" in text
     assert "Recently Done" in text
     assert "Needs Review" in text
@@ -131,6 +136,7 @@ def test_build_roles_status_text_includes_workspace_queue_focus_and_commits(tmp_
     assert "Routing / CSV" in text
     assert "Layer visibility" in text
     assert "Recent Commits" in text
+    assert "Friendly PHILIP-20260405-010-design-and-scope-drawing-editor-workflow" in text
     assert "Philip" in text
     assert "Matthew" in text
 
@@ -161,9 +167,13 @@ def test_build_roles_status_text_uses_ssh_probe_when_local_workspace_missing(mon
                 "ready": 1,
                 "in_progress": 1,
                 "review": 2,
+                "waiting_human": 0,
                 "done": 5,
                 "debt": 1,
             },
+            "recent_done_entries": [{"task_id": "PHILIP-011", "title": "Fatih completed phase", "filename": "PHILIP-011-Fatih-COMPLETED.md"}],
+            "recent_review_entries": [{"task_id": "MATTHEW-REVIEW-4", "title": "Review pass 4 summary", "filename": "MATTHEW-20260407-REVIEW-PASS-4-SUMMARY.md"}],
+            "recent_in_progress_entries": [{"task_id": "PHILIP-011-IMPL", "title": "Fatih implementation final", "filename": "PHILIP-011-Fatih-IMPLEMENTATION-20260407-FINAL.md"}],
             "recent_done": ["PHILIP-011-Fatih-COMPLETED.md"],
             "recent_review": ["MATTHEW-20260407-REVIEW-PASS-4-SUMMARY.md"],
             "recent_in_progress": ["PHILIP-011-Fatih-IMPLEMENTATION-20260407-FINAL.md"],
@@ -189,8 +199,8 @@ def test_build_roles_status_text_uses_ssh_probe_when_local_workspace_missing(mon
     text = ms.build_roles_status_text()
 
     assert "umut@192.168.1.107:/home/umut/meridian" in text
-    assert "PHILIP-011-Fatih-COMPLETED.md" in text
-    assert "MATTHEW-20260407-REVIEW-PASS-4-SUMMARY.md" in text
+    assert "Fatih completed phase" in text
+    assert "Review pass 4 summary" in text
     assert "Attribute table" in text
 
 
@@ -218,4 +228,4 @@ def test_build_roles_status_text_reads_legacy_in_progress_alias(tmp_path, monkey
     text = ms.build_roles_status_text()
 
     assert "in_progress=1" in text
-    assert "PHILIP-legacy-task.md" in text
+    assert "Friendly PHILIP-legacy-task" in text

@@ -15,7 +15,7 @@ import yaml
 
 from hermes_cli.config import load_config
 from hermes_cli.meridian_dispatcher import _resolve_workspace_path
-from hermes_cli.meridian_workflow import queue_dir_candidates
+from hermes_cli.meridian_workflow import load_task_document, queue_dir_candidates
 
 
 ROLE_NAMES = ("philip", "fatih", "matthew")
@@ -370,6 +370,47 @@ def _git_headlines(workspace: Path, *, limit: int = 4) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
+def _humanize_task_title(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    text = Path(text).stem
+    text = re.sub(r"[_-]+", " ", text).strip()
+    text = re.sub(r"\s+", " ", text)
+    if not text:
+        return ""
+    return text[0].upper() + text[1:]
+
+
+def _task_entry_from_path(path: Path, queue: str) -> dict[str, str]:
+    task_id = path.stem
+    title = ""
+    try:
+        document = load_task_document(path, queue)
+    except Exception:
+        document = None
+    if document is not None:
+        task_id = document.task_id
+        title = str(document.metadata.get("title") or "").strip()
+    if not title or title == task_id:
+        title = _humanize_task_title(task_id)
+    updated_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+    return {
+        "task_id": task_id,
+        "title": title,
+        "filename": path.name,
+        "updated_at": updated_at,
+    }
+
+
+def _format_task_entry(entry: dict[str, str]) -> str:
+    task_id = str(entry.get("task_id") or "").strip()
+    title = str(entry.get("title") or "").strip()
+    if title and title != task_id:
+        return f"`{task_id}` {title}"
+    return f"`{task_id or entry.get('filename') or 'task'}`"
+
+
 def _recent_queue_items(workspace: Path, queue: str, *, limit: int = 3) -> list[str]:
     items: list[Path] = []
     seen_names: set[str] = set()
@@ -383,6 +424,21 @@ def _recent_queue_items(workspace: Path, queue: str, *, limit: int = 3) -> list[
             items.append(path)
     items.sort(key=lambda path: path.stat().st_mtime, reverse=True)
     return [path.name for path in items[:limit]]
+
+
+def _recent_queue_entries(workspace: Path, queue: str, *, limit: int = 3) -> list[dict[str, str]]:
+    items: list[Path] = []
+    seen_names: set[str] = set()
+    for queue_dir in queue_dir_candidates(workspace, queue):
+        if not queue_dir.exists():
+            continue
+        for path in queue_dir.iterdir():
+            if not path.is_file() or path.name.startswith(".") or path.name in seen_names:
+                continue
+            seen_names.add(path.name)
+            items.append(path)
+    items.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return [_task_entry_from_path(path, queue) for path in items[:limit]]
 
 
 def _collect_local_workspace_summary(workspace: Path) -> dict[str, Any]:
@@ -407,6 +463,9 @@ def _collect_local_workspace_summary(workspace: Path) -> dict[str, Any]:
         "workspace": str(workspace),
         "source": "local",
         "queue_counts": {queue: len(names) for queue, names in queue_map.items()},
+        "recent_done_entries": _recent_queue_entries(workspace, "done"),
+        "recent_review_entries": _recent_queue_entries(workspace, "review"),
+        "recent_in_progress_entries": _recent_queue_entries(workspace, "in_progress"),
         "recent_done": _recent_queue_items(workspace, "done"),
         "recent_review": _recent_queue_items(workspace, "review"),
         "recent_in_progress": _recent_queue_items(workspace, "in_progress"),
@@ -418,6 +477,7 @@ def _collect_local_workspace_summary(workspace: Path) -> dict[str, Any]:
 def _collect_remote_workspace_summary(settings: dict[str, str]) -> dict[str, Any] | None:
     script = r"""
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -454,6 +514,37 @@ def recent(queue, limit=3):
     items = queue_items(queue)
     items.sort(key=lambda path: path.stat().st_mtime, reverse=True)
     return [path.name for path in items[:limit]]
+
+def task_entry(path, queue):
+    task_id = path.stem
+    title = ""
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if text.startswith("---\n"):
+            closing = text.find("\n---\n", 4)
+            if closing != -1:
+                raw = text[4:closing]
+                for line in raw.splitlines():
+                    if line.startswith("id:") and not task_id:
+                        task_id = line.split(":", 1)[1].strip() or task_id
+                    elif line.startswith("title:"):
+                        title = line.split(":", 1)[1].strip().strip("\"'") or title
+    except Exception:
+        pass
+    if not title or title == task_id:
+        title = re.sub(r"[_-]+", " ", task_id).strip()
+        title = re.sub(r"\s+", " ", title)
+        title = title[:1].upper() + title[1:] if title else task_id
+    return {
+        "task_id": task_id,
+        "title": title,
+        "filename": path.name,
+    }
+
+def recent_entries(queue, limit=3):
+    items = queue_items(queue)
+    items.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return [task_entry(path, queue) for path in items[:limit]]
 
 def focus_matches():
     lowered = {
@@ -501,6 +592,9 @@ print(json.dumps({
     "workspace": str(workspace),
     "source": "ssh",
     "queue_counts": {queue: len(names) for queue, names in queue_map.items()},
+    "recent_done_entries": recent_entries("done"),
+    "recent_review_entries": recent_entries("review"),
+    "recent_in_progress_entries": recent_entries("in_progress"),
     "recent_done": recent("done"),
     "recent_review": recent("review"),
     "recent_in_progress": recent("in_progress"),
@@ -586,21 +680,34 @@ def build_roles_status_text(workspace: str | Path | None = None) -> str:
             f"`ready={queue_counts.get('ready', 0)}` "
             f"`in_progress={queue_counts.get('in_progress', 0)}` "
             f"`review={queue_counts.get('review', 0)}` "
+            f"`waiting_human={queue_counts.get('waiting_human', 0)}` "
             f"`done={queue_counts.get('done', 0)}` "
             f"`debt={queue_counts.get('debt', 0)}`"
         )
-        recent_done = summary.get("recent_done") or []
+        recent_done = summary.get("recent_done_entries") or summary.get("recent_done") or []
         if recent_done:
             lines.append("**Recently Done:**")
-            lines.extend(f"- `{item}`" for item in recent_done)
-        recent_review = summary.get("recent_review") or []
+            for item in recent_done:
+                if isinstance(item, dict):
+                    lines.append(f"- {_format_task_entry(item)}")
+                else:
+                    lines.append(f"- `{item}`")
+        recent_review = summary.get("recent_review_entries") or summary.get("recent_review") or []
         if recent_review:
             lines.append("**Needs Review:**")
-            lines.extend(f"- `{item}`" for item in recent_review)
-        recent_in_progress = summary.get("recent_in_progress") or []
+            for item in recent_review:
+                if isinstance(item, dict):
+                    lines.append(f"- {_format_task_entry(item)}")
+                else:
+                    lines.append(f"- `{item}`")
+        recent_in_progress = summary.get("recent_in_progress_entries") or summary.get("recent_in_progress") or []
         if recent_in_progress:
             lines.append("**In Progress:**")
-            lines.extend(f"- `{item}`" for item in recent_in_progress)
+            for item in recent_in_progress:
+                if isinstance(item, dict):
+                    lines.append(f"- {_format_task_entry(item)}")
+                else:
+                    lines.append(f"- `{item}`")
         focus_items = summary.get("focus_items") or []
         if focus_items:
             lines.append("**Tracked Topics:**")
