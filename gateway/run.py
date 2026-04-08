@@ -3541,6 +3541,8 @@ class GatewayRunner:
             return self._meridian_waiting_text()
         if subcommand == "tickets":
             return self._meridian_tickets_text(limit=8)
+        if subcommand == "board":
+            return self._meridian_board_text()
 
         return self._meridian_menu_text(event.source)
 
@@ -3582,6 +3584,7 @@ class GatewayRunner:
             "",
             "**Quick actions**",
             "`/meridian status` — live role + workspace status",
+            "`/meridian board` — compact Jira-style task board",
             "`/meridian waiting` — items waiting on you",
             "`/meridian tickets` — recent support tickets",
             "`/meridian_watch` — start a live role watch",
@@ -3626,6 +3629,52 @@ class GatewayRunner:
         if waiting_tasks:
             parts.append("Task detayı için: `/meridian_task`")
         return "\n\n".join(parts)
+
+    def _meridian_board_text(self) -> str:
+        from hermes_cli.meridian_dispatcher import _resolve_workspace_path
+        from hermes_cli.meridian_workflow import list_task_refs
+
+        workspace = _resolve_workspace_path(None)
+        queues = list_task_refs(workspace)
+        queue_order = ("backlog", "ready", "in_progress", "review", "waiting_human", "done", "debt")
+
+        lines = ["📋 **Meridian Board**", "", f"Workspace: `{workspace}`"]
+        for queue in queue_order:
+            items = queues.get(queue, [])
+            lines.extend(["", f"**{queue}** `{len(items)}`"])
+            if not items:
+                lines.append("-")
+                continue
+            for task in items[:10]:
+                metadata = dict(task.metadata or {})
+                title = str(metadata.get("title") or task.task_id).strip()
+                branch = str(metadata.get("pr_branch") or metadata.get("branch") or "").strip()
+                commit_sha = str(metadata.get("commit_sha") or "").strip()
+                verification_status = str(metadata.get("verification_status") or "").strip()
+                pushed = metadata.get("pushed")
+                owner = str(metadata.get("claimed_by") or metadata.get("assigned_to") or "").strip()
+
+                parts = [f"- `{task.task_id}`"]
+                if title and title != task.task_id:
+                    parts.append(title)
+                details = []
+                if owner:
+                    details.append(f"owner={owner}")
+                if branch:
+                    details.append(f"branch={branch}")
+                if commit_sha:
+                    details.append(f"commit={commit_sha[:12]}")
+                if verification_status:
+                    details.append(f"verify={verification_status}")
+                if pushed is not None:
+                    details.append(f"pushed={str(pushed).lower()}")
+                if details:
+                    parts.append("[" + " | ".join(details) + "]")
+                lines.append(" ".join(parts))
+            remaining = len(items) - 10
+            if remaining > 0:
+                lines.append(f"- +{remaining} more")
+        return "\n".join(lines)
 
     def _meridian_tickets_text(self, *, limit: int = 8) -> str:
         from hermes_cli.meridian_support import (
