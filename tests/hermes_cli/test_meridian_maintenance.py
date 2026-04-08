@@ -10,6 +10,9 @@ from hermes_cli.meridian_maintenance import (
     meridian_doctor_report,
     migrate_in_progress_queue,
     migrate_review_queue,
+    run_meridian_doctor,
+    run_migrate_in_progress_queue,
+    run_migrate_review_queue,
 )
 
 
@@ -171,3 +174,52 @@ def test_format_review_migration_handles_empty_report(tmp_path):
     rendered = format_review_migration(report)
 
     assert "No flat review artifacts found." in rendered
+
+
+def test_run_meridian_doctor_uses_remote_target_when_local_missing(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(
+        "hermes_cli.meridian_maintenance._resolve_maintenance_target",
+        lambda workspace: type(
+            "_Target",
+            (),
+            {"mode": "ssh", "workspace": "/home/umut/meridian", "host": "192.168.1.107", "user": "umut"},
+        )(),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.meridian_maintenance._remote_doctor_report",
+        lambda target: captured.setdefault("report", {"workspace": target.workspace, "healthy": True}),
+    )
+
+    report = run_meridian_doctor("/home/umut/meridian")
+
+    assert report["workspace"] == "/home/umut/meridian"
+    assert report["healthy"] is True
+
+
+def test_run_migrations_use_remote_target_when_local_missing(monkeypatch):
+    monkeypatch.setattr(
+        "hermes_cli.meridian_maintenance._resolve_maintenance_target",
+        lambda workspace: type(
+            "_Target",
+            (),
+            {"mode": "ssh", "workspace": "/home/umut/meridian", "host": "192.168.1.107", "user": "umut"},
+        )(),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.meridian_maintenance._remote_migrate_in_progress",
+        lambda target, apply=False: {"workspace": target.workspace, "apply": apply, "items": [], "summary": {}},
+    )
+    monkeypatch.setattr(
+        "hermes_cli.meridian_maintenance._remote_migrate_review",
+        lambda target, apply=False: {"workspace": target.workspace, "apply": apply, "items": [], "summary": {}},
+    )
+
+    in_progress = run_migrate_in_progress_queue("/home/umut/meridian", apply=True)
+    review = run_migrate_review_queue("/home/umut/meridian", apply=False)
+
+    assert in_progress["workspace"] == "/home/umut/meridian"
+    assert in_progress["apply"] is True
+    assert review["workspace"] == "/home/umut/meridian"
+    assert review["apply"] is False

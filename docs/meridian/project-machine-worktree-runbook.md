@@ -33,7 +33,7 @@ Use [`scripts/meridian-worktree-bootstrap.sh`](/Users/umut/Projects/hermes-agent
 
 ```bash
 cd ~/Hermes-Agent
-scripts/meridian-worktree-bootstrap.sh --repo /Users/umut/Projects/meridian --role fatih
+scripts/meridian-worktree-bootstrap.sh --repo /home/umut/meridian --role fatih
 ```
 
 Default branch names:
@@ -49,13 +49,13 @@ The script creates:
 
 ## Recommended Layout
 
-For `/Users/umut/Projects/meridian`, the result looks like:
+For `/home/umut/meridian`, the result looks like:
 
 ```text
-/Users/umut/Projects/meridian
-/Users/umut/Projects/meridian/.worktrees/fatih
-/Users/umut/Projects/meridian/.worktrees/philip
-/Users/umut/Projects/meridian/.worktrees/matthew
+/home/umut/meridian
+/home/umut/meridian/.worktrees/fatih
+/home/umut/meridian/.worktrees/philip
+/home/umut/meridian/.worktrees/matthew
 ```
 
 Suggested use:

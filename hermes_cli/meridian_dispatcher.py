@@ -40,9 +40,9 @@ from hermes_cli.meridian_maintenance import (
     format_in_progress_migration,
     format_meridian_doctor_report,
     format_review_migration,
-    meridian_doctor_report,
-    migrate_in_progress_queue,
-    migrate_review_queue,
+    run_meridian_doctor,
+    run_migrate_in_progress_queue,
+    run_migrate_review_queue,
 )
 from hermes_cli.meridian_review import (
     apply_recommended_transition,
@@ -1260,14 +1260,14 @@ def meridian_command(args) -> int:
         return 0
 
     if subcommand == "doctor":
-        print(format_meridian_doctor_report(meridian_doctor_report(_resolve_workspace_path(workspace))))
+        print(format_meridian_doctor_report(run_meridian_doctor(workspace or ".")))
         return 0
 
     if subcommand == "migrate":
         print(
             format_in_progress_migration(
-                migrate_in_progress_queue(
-                    _resolve_workspace_path(workspace),
+                run_migrate_in_progress_queue(
+                    workspace or ".",
                     apply=bool(getattr(args, "apply", False)),
                 )
             )
@@ -1277,8 +1277,8 @@ def meridian_command(args) -> int:
     if subcommand == "migrate-review":
         print(
             format_review_migration(
-                migrate_review_queue(
-                    _resolve_workspace_path(workspace),
+                run_migrate_review_queue(
+                    workspace or ".",
                     apply=bool(getattr(args, "apply", False)),
                 )
             )
