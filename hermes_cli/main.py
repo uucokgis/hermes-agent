@@ -4791,6 +4791,21 @@ For more help on a command:
         help="Perform the migration; otherwise show a dry-run preview",
     )
 
+    meridian_migrate_review = meridian_subparsers.add_parser(
+        "migrate-review",
+        help="Migrate flat Meridian review artifacts into split review directories",
+    )
+    meridian_migrate_review.add_argument(
+        "--workspace",
+        default=None,
+        help="Workspace root containing the tasks/ directory (default: auto-discover Meridian workspace)",
+    )
+    meridian_migrate_review.add_argument(
+        "--apply",
+        action="store_true",
+        help="Perform the review migration; otherwise show a dry-run preview",
+    )
+
     meridian_review_transition = meridian_subparsers.add_parser(
         "review-transition",
         help="Preview or apply a structured Matthew review transition recommendation",

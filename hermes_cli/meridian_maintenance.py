@@ -15,6 +15,12 @@ from hermes_cli.meridian_workflow import (
 
 
 REVIEW_CATEGORY_ORDER = ("active", "decision", "patrol", "archive", "unknown")
+REVIEW_CATEGORY_DIRECTORIES = {
+    "active": "active",
+    "decision": "decisions",
+    "patrol": "patrol",
+    "archive": "archive",
+}
 
 
 def _read_text(path: Path) -> str:
@@ -69,6 +75,28 @@ def classify_review_artifact(path: Path) -> str:
     if metadata.get("id"):
         return "active"
     return "unknown"
+
+
+def _review_destination_dir(workspace: Path, category: str) -> Path | None:
+    target = REVIEW_CATEGORY_DIRECTORIES.get(category)
+    if not target:
+        return None
+    return workspace / "tasks" / "review" / target
+
+
+def _review_destination_matches(workspace: Path, flat_path: Path, category: str) -> list[Path]:
+    destination_dir = _review_destination_dir(workspace, category)
+    if destination_dir is None or not destination_dir.exists():
+        return []
+    flat_task_id, flat_name = _task_identity(flat_path)
+    matches: list[Path] = []
+    for candidate in sorted(destination_dir.iterdir()):
+        if not candidate.is_file() or candidate.name.startswith("."):
+            continue
+        candidate_task_id, candidate_name = _task_identity(candidate)
+        if candidate_name == flat_name or candidate_task_id == flat_task_id:
+            matches.append(candidate)
+    return matches
 
 
 def meridian_doctor_report(workspace: str | Path) -> dict[str, Any]:
@@ -277,6 +305,134 @@ def format_in_progress_migration(report: dict[str, Any]) -> str:
         )
     if not report.get("items"):
         lines.append("  No legacy in-progress tasks found.")
+    return "\n".join(lines)
+
+
+def migrate_review_queue(workspace: str | Path, *, apply: bool = False) -> dict[str, Any]:
+    workspace_path = Path(workspace).resolve()
+    review_root = workspace_path / "tasks" / "review"
+    items: list[dict[str, Any]] = []
+
+    if not review_root.exists():
+        return {
+            "workspace": str(workspace_path),
+            "apply": apply,
+            "items": items,
+            "summary": {"moved": 0, "removed_duplicates": 0, "blocked": 0, "unknown": 0},
+        }
+
+    for flat_path in sorted(review_root.iterdir()):
+        if not flat_path.is_file() or flat_path.name.startswith("."):
+            continue
+        category = classify_review_artifact(flat_path)
+        destination_dir = _review_destination_dir(workspace_path, category)
+        task_id, filename = _task_identity(flat_path)
+
+        if destination_dir is None:
+            items.append(
+                {
+                    "task_id": task_id,
+                    "category": category,
+                    "status": "blocked_unknown_category",
+                    "from": str(flat_path),
+                }
+            )
+            continue
+
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        matches = _review_destination_matches(workspace_path, flat_path, category)
+        destination = destination_dir / filename
+        if not matches:
+            status = "would_move"
+            if apply:
+                flat_path.replace(destination)
+                status = "moved"
+            items.append(
+                {
+                    "task_id": task_id,
+                    "category": category,
+                    "status": status,
+                    "from": str(flat_path),
+                    "to": str(destination),
+                }
+            )
+            continue
+
+        if len(matches) > 1:
+            items.append(
+                {
+                    "task_id": task_id,
+                    "category": category,
+                    "status": "blocked_ambiguous",
+                    "from": str(flat_path),
+                    "matches": [str(item) for item in matches],
+                }
+            )
+            continue
+
+        match = matches[0]
+        if _compare_duplicate_state(flat_path, match) == "identical_duplicate":
+            status = "would_remove_duplicate"
+            if apply:
+                flat_path.unlink()
+                status = "removed_duplicate"
+            items.append(
+                {
+                    "task_id": task_id,
+                    "category": category,
+                    "status": status,
+                    "from": str(flat_path),
+                    "to": str(match),
+                }
+            )
+            continue
+
+        items.append(
+            {
+                "task_id": task_id,
+                "category": category,
+                "status": "blocked_divergent",
+                "from": str(flat_path),
+                "to": str(match),
+            }
+        )
+
+    summary = {
+        "moved": sum(1 for item in items if item["status"] == "moved"),
+        "removed_duplicates": sum(1 for item in items if item["status"] == "removed_duplicate"),
+        "blocked": sum(1 for item in items if item["status"].startswith("blocked")),
+        "unknown": sum(1 for item in items if item["status"] == "blocked_unknown_category"),
+    }
+    return {
+        "workspace": str(workspace_path),
+        "apply": apply,
+        "items": items,
+        "summary": summary,
+    }
+
+
+def format_review_migration(report: dict[str, Any]) -> str:
+    summary = report.get("summary") or {}
+    lines = [
+        "Meridian review migration",
+        f"  Workspace:      {report.get('workspace') or '-'}",
+        f"  Mode:           {'apply' if report.get('apply') else 'dry-run'}",
+        "  Summary:        "
+        f"moved={summary.get('moved', 0)} "
+        f"removed_duplicates={summary.get('removed_duplicates', 0)} "
+        f"blocked={summary.get('blocked', 0)} "
+        f"unknown={summary.get('unknown', 0)}",
+    ]
+    for item in report.get("items") or []:
+        lines.append(
+            "  "
+            f"{item.get('task_id') or '-'} "
+            f"category={item.get('category') or '-'} "
+            f"status={item.get('status') or '-'} "
+            f"from={item.get('from') or '-'}"
+        )
+    if not report.get("items"):
+        lines.append("  No flat review artifacts found.")
     return "\n".join(lines)
 
 

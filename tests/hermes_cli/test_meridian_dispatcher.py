@@ -861,6 +861,23 @@ def test_meridian_command_migrate_dry_run_prints_preview(tmp_path, monkeypatch, 
     assert (workspace / "tasks" / "in-progress" / "legacy-task.md").exists()
 
 
+def test_meridian_command_migrate_review_prints_preview(tmp_path, monkeypatch, capsys):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    _write_task(workspace / "tasks" / "review" / "task-1.md", "TASK-1")
+
+    rc = md.meridian_command(
+        Namespace(meridian_command="migrate-review", workspace=str(workspace), apply=False)
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Meridian review migration" in out
+    assert "category=active" in out
+    assert "would_move" in out
+
+
 def test_meridian_command_review_transition_prints_dry_run(tmp_path, monkeypatch, capsys):
     from hermes_cli import meridian_dispatcher as md
 
@@ -1059,6 +1076,35 @@ def test_main_routes_meridian_migrate_subcommand(monkeypatch):
     assert captured == {
         "command": "meridian",
         "subcommand": "migrate",
+        "workspace": "/tmp/meridian-workspace",
+        "apply": True,
+    }
+
+
+def test_main_routes_meridian_migrate_review_subcommand(monkeypatch):
+    import sys
+    import hermes_cli.main as main_mod
+
+    captured = {}
+
+    def fake_cmd_meridian(args):
+        captured["command"] = args.command
+        captured["subcommand"] = args.meridian_command
+        captured["workspace"] = args.workspace
+        captured["apply"] = args.apply
+
+    monkeypatch.setattr(main_mod, "cmd_meridian", fake_cmd_meridian)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["hermes", "meridian", "migrate-review", "--workspace", "/tmp/meridian-workspace", "--apply"],
+    )
+
+    main_mod.main()
+
+    assert captured == {
+        "command": "meridian",
+        "subcommand": "migrate-review",
         "workspace": "/tmp/meridian-workspace",
         "apply": True,
     }

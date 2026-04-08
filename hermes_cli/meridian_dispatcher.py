@@ -39,8 +39,10 @@ from hermes_cli.meridian_quality import latest_quality_result, run_quality_gate_
 from hermes_cli.meridian_maintenance import (
     format_in_progress_migration,
     format_meridian_doctor_report,
+    format_review_migration,
     meridian_doctor_report,
     migrate_in_progress_queue,
+    migrate_review_queue,
 )
 from hermes_cli.meridian_review import (
     apply_recommended_transition,
@@ -1265,6 +1267,17 @@ def meridian_command(args) -> int:
         print(
             format_in_progress_migration(
                 migrate_in_progress_queue(
+                    _resolve_workspace_path(workspace),
+                    apply=bool(getattr(args, "apply", False)),
+                )
+            )
+        )
+        return 0
+
+    if subcommand == "migrate-review":
+        print(
+            format_review_migration(
+                migrate_review_queue(
                     _resolve_workspace_path(workspace),
                     apply=bool(getattr(args, "apply", False)),
                 )
