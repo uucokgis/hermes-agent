@@ -12,6 +12,8 @@ import os
 import sys
 from pathlib import Path
 
+from hermes_constants import get_hermes_home
+
 
 # ---------------------------------------------------------------------------
 # Curses-based interactive picker (same pattern as hermes tools)
@@ -229,15 +231,19 @@ def _get_available_providers() -> list:
                 continue
         except Exception:
             continue
-        # Override description with setup hint
+
         schema = provider.get_config_schema() if hasattr(provider, "get_config_schema") else []
         has_secrets = any(f.get("secret") for f in schema)
-        if has_secrets:
+        has_non_secrets = any(not f.get("secret") for f in schema)
+        if has_secrets and has_non_secrets:
+            setup_hint = "API key / local"
+        elif has_secrets:
             setup_hint = "requires API key"
         elif not schema:
             setup_hint = "no setup needed"
         else:
             setup_hint = "local"
+
         results.append((name, setup_hint, provider))
     return results
 
@@ -245,6 +251,42 @@ def _get_available_providers() -> list:
 # ---------------------------------------------------------------------------
 # Setup wizard
 # ---------------------------------------------------------------------------
+
+def cmd_setup_provider(provider_name: str) -> None:
+    """Run memory setup for a specific provider, skipping the picker."""
+    from hermes_cli.config import load_config, save_config
+
+    providers = _get_available_providers()
+    match = None
+    for name, desc, provider in providers:
+        if name == provider_name:
+            match = (name, desc, provider)
+            break
+
+    if not match:
+        print(f"\n  Memory provider '{provider_name}' not found.")
+        print("  Run 'hermes memory setup' to see available providers.\n")
+        return
+
+    name, _, provider = match
+
+    _install_dependencies(name)
+
+    config = load_config()
+    if not isinstance(config.get("memory"), dict):
+        config["memory"] = {}
+
+    if hasattr(provider, "post_setup"):
+        hermes_home = str(get_hermes_home())
+        provider.post_setup(hermes_home, config)
+        return
+
+    # Fallback: generic schema-based setup (same as cmd_setup)
+    config["memory"]["provider"] = name
+    save_config(config)
+    print(f"\n  Memory provider: {name}")
+    print(f"  Activation saved to config.yaml\n")
+
 
 def cmd_setup(args) -> None:
     """Interactive memory provider setup wizard."""
@@ -283,13 +325,20 @@ def cmd_setup(args) -> None:
     # Install pip dependencies if declared in plugin.yaml
     _install_dependencies(name)
 
+    # If the provider has a post_setup hook, delegate entirely to it.
+    # The hook handles its own config, connection test, and activation.
+    if hasattr(provider, "post_setup"):
+        hermes_home = str(get_hermes_home())
+        provider.post_setup(hermes_home, config)
+        return
+
     schema = provider.get_config_schema() if hasattr(provider, "get_config_schema") else []
 
     provider_config = config["memory"].get(name, {})
     if not isinstance(provider_config, dict):
         provider_config = {}
 
-    env_path = Path(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))) / ".env"
+    env_path = get_hermes_home() / ".env"
     env_writes = {}
 
     if schema:
@@ -353,23 +402,23 @@ def cmd_setup(args) -> None:
     save_config(config)
 
     # Write non-secret config to provider's native location
-    hermes_home = str(Path(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))))
+    hermes_home = str(get_hermes_home())
     if provider_config and hasattr(provider, "save_config"):
         try:
             provider.save_config(provider_config, hermes_home)
         except Exception as e:
-            print(f"  ⚠ Failed to write provider config: {e}")
+            print(f"  Failed to write provider config: {e}")
 
     # Write secrets to .env
     if env_writes:
         _write_env_vars(env_path, env_writes)
 
-    print(f"\n  ✓ Memory provider: {name}")
-    print(f"  ✓ Activation saved to config.yaml")
+    print(f"\n  Memory provider: {name}")
+    print(f"  Activation saved to config.yaml")
     if provider_config:
-        print(f"  ✓ Provider config saved")
+        print(f"  Provider config saved")
     if env_writes:
-        print(f"  ✓ API keys saved to .env")
+        print(f"  API keys saved to .env")
     print(f"\n  Start a new session to activate.\n")
 
 
