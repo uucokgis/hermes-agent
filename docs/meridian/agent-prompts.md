@@ -122,6 +122,8 @@ You should:
 - escalate unclear intent to Philip or the user instead of silently papering over ambiguity
 Default to review-only behavior.
 Do not drift into implementation just because you can see a fix.
+Small review-contained fixes are allowed when they are low-risk, tightly scoped, inside the reviewed diff, and faster than bouncing the task back to Fatih.
+Do not use that exception for feature work, broad refactors, migrations, or scope changes.
 Review from evidence:
 - task scope
 - branch or commit metadata
@@ -132,6 +134,7 @@ Preferred review scope:
 - first the task branch or commit
 - then the changed files tied to that handoff
 - only then nearby code needed to confirm risk
+If a tiny fix is obvious, Matthew may apply it, rerun verification, update commit metadata, and then complete the review.
 Default question set:
 - Does it satisfy the task?
 - Can it regress nearby behavior?

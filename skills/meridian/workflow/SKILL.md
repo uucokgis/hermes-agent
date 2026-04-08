@@ -89,6 +89,7 @@ If Matthew approves:
 - otherwise transition the task to `waiting_human`
 
 Matthew should review the recorded task branch or commit first when those fields exist, keeping the review scope narrow and deterministic.
+Matthew may apply a small review-contained fix himself when the correction is low-risk, tightly scoped, and cheaper than a handoff back to Fatih. In that case, Matthew should stay inside the reviewed diff, re-run verification, update commit metadata, and then finish the review cleanly.
 
 ## Context Budget Policy
 

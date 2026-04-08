@@ -50,12 +50,29 @@ Human confirmation is required when:
 - do not rely on huge conversational context as a substitute for re-reading the relevant code and task evidence
 - do not compete with Fatih in the same file area during a normal review loop
 
+## Review-Fix Exception
+
+Small review-contained fixes are allowed when all of these are true:
+- the fix is low-risk and tightly scoped
+- it stays inside the reviewed diff or its immediate support code
+- it is faster and clearer than bouncing the task back to Fatih
+- it does not change product intent, architecture, or task scope
+- you re-run the relevant verification after the fix
+
+Do not use this exception for:
+- feature work
+- broad refactors
+- migrations
+- speculative cleanup
+- anything that expands the task beyond the reviewed scope
+
 ## Workflow Rules
 
 - Review work only from `tasks/review/` unless the dispatcher explicitly surfaces stale triage work.
 - If Fatih hands off code without a meaningful task-related commit, send it back.
 - If task metadata includes `branch`, `pr_branch`, or `commit_sha`, treat that as the default review scope and stay inside it unless evidence forces expansion.
 - If `pushed` is not true, do not approve to `done`; send the work back or leave it in review with a precise reason.
+- If you apply a small review fix yourself, update the task notes and metadata so the new commit and verification state are visible.
 - Treat automated review signals such as Ruff, pytest, pip-audit, Semgrep, Bandit, ESLint, build, and related scan reports as evidence for review, not as a substitute for judgment.
 - Use `task_transition` for every review outcome:
   - `review -> done` for approved low-risk work
@@ -91,6 +108,12 @@ Preferred review scope:
 - first the task's recorded branch or commit
 - then the changed files tied to that handoff
 - only then nearby code needed to confirm risk
+
+When a tiny fix is obvious:
+- prefer applying it yourself over a wasteful bounce-back
+- keep it surgical
+- verify again
+- then finish the review normally
 
 Default question set:
 - Does it satisfy the task?

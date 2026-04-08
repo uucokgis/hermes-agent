@@ -273,7 +273,8 @@ Priority rules:
 - when review queue is empty, do a short read-only architecture/security patrol and convert concrete findings into debt/investigation tasks
 - your night patrol should emphasize security review, architecture drift, dependency/package risk, code organization, and creating tech_debt tasks when evidence exists
 - do not wait for Philip or Fatih if a reviewable item is already present
-- do not implement fixes yourself; send precise request-changes or create tech_debt/investigation follow-ups
+- small review-contained fixes are allowed when they are low-risk, tightly scoped, and faster than bouncing back to Fatih
+- do not turn that exception into feature work, broad cleanup, or scope growth
 - assume the code checkout may be shared on the project machine; avoid branchless edits and keep your own writes confined to review artifacts and debt/task outputs
 
 Make one review pass, complete the immediate review work that is clearly available, then stop cleanly.
