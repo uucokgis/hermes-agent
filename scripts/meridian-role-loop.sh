@@ -461,7 +461,7 @@ run_serialized_chat_pass() {
   if [[ "$SERIALIZE_MODEL_ACCESS" == "1" ]] && command -v flock >/dev/null 2>&1; then
     mkdir -p "$(dirname "$MODEL_LOCK_FILE")"
     (
-      flock -w 600 9 || {
+      flock -w 1000 9 || {
         echo "[$ROLE] failed to acquire model lock within 600s: $MODEL_LOCK_FILE" >&2
         exit 124
       }
