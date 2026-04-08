@@ -11,9 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from hermes_constants import get_hermes_home
+from hermes_cli.meridian_workflow import QUEUE_NAMES, queue_dir_candidates
 
 
-QUEUE_ORDER = ("backlog", "ready", "in_progress", "review", "waiting_human", "done", "debt")
+QUEUE_ORDER = QUEUE_NAMES
 STATE_PATH = get_hermes_home() / "meridian" / "notifier_state.json"
 SUPPORT_QUEUES = ("inbox", "responded", "summaries")
 
@@ -159,13 +160,13 @@ def save_combined_state(
 def _local_snapshot(workspace: Path) -> dict[str, TaskSnapshot]:
     snapshot: dict[str, TaskSnapshot] = {}
     for queue in QUEUE_ORDER:
-        queue_dir = workspace / "tasks" / queue
-        if not queue_dir.exists():
-            continue
-        for path in sorted(queue_dir.iterdir()):
-            if not path.is_file() or path.name.startswith("."):
+        for queue_dir in queue_dir_candidates(workspace, queue):
+            if not queue_dir.exists():
                 continue
-            snapshot[path.name] = TaskSnapshot(queue=queue, filename=path.name)
+            for path in sorted(queue_dir.iterdir()):
+                if not path.is_file() or path.name.startswith("."):
+                    continue
+                snapshot.setdefault(path.name, TaskSnapshot(queue=queue, filename=path.name))
     return snapshot
 
 
@@ -175,15 +176,17 @@ import json
 from pathlib import Path
 workspace = Path(%r).expanduser()
 queues = %r
+aliases = {"in_progress": ("in-progress",)}
 payload = {}
 for queue in queues:
-    queue_dir = workspace / "tasks" / queue
-    if not queue_dir.exists():
-        continue
-    for path in sorted(queue_dir.iterdir()):
-        if not path.is_file() or path.name.startswith('.'):
+    for name in (queue, *aliases.get(queue, ())):
+        queue_dir = workspace / "tasks" / name
+        if not queue_dir.exists():
             continue
-        payload[path.name] = {"queue": queue, "filename": path.name}
+        for path in sorted(queue_dir.iterdir()):
+            if not path.is_file() or path.name.startswith('.'):
+                continue
+            payload.setdefault(path.name, {"queue": queue, "filename": path.name})
 print(json.dumps(payload, ensure_ascii=False))
 """ % (settings["workspace"], QUEUE_ORDER)
     if settings.get("password"):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from hermes_cli import meridian_notifier as mn
 
 
@@ -123,3 +125,14 @@ def test_run_waiting_human_notifier_includes_support_ticket_followups(tmp_path, 
     assert result2["has_support_waiting"] is True
     assert result2["changed"] is True
     assert "20260408002" in result2["brief"]
+
+
+def test_local_snapshot_reads_legacy_in_progress_alias(tmp_path):
+    workspace = tmp_path / "meridian"
+    legacy_dir = workspace / "tasks" / "in-progress"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    (legacy_dir / "task-legacy.md").write_text("---\nid: task-legacy\n---\n", encoding="utf-8")
+
+    snapshot = mn._local_snapshot(Path(workspace))
+
+    assert snapshot["task-legacy.md"].queue == "in_progress"

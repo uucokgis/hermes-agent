@@ -12,6 +12,7 @@ from hermes_cli.meridian_workflow import (
     MeridianWorkflowError,
     claim_task,
     locate_task,
+    list_task_refs,
     transition_task,
 )
 
@@ -202,6 +203,37 @@ def test_transition_to_waiting_human_sets_blocking_metadata(tmp_path):
     assert document.metadata["status"] == "waiting_human"
     assert document.metadata["waiting_on"] == "human_confirmation"
     assert document.metadata["blocked_reason"] == "migration approval required"
+
+
+def test_locate_task_prefers_canonical_in_progress_over_legacy_alias(tmp_path):
+    workspace = _make_workspace(tmp_path)
+    legacy_dir = workspace / "tasks" / "in-progress"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    legacy_path = legacy_dir / "task-1.md"
+    canonical_path = workspace / "tasks" / "in_progress" / "task-1.md"
+    _write_task(legacy_path, "TASK-1", metadata={"title": "legacy"})
+    _write_task(canonical_path, "TASK-1", metadata={"title": "canonical"})
+
+    document = locate_task(workspace, "TASK-1")
+
+    assert document.path == canonical_path
+    assert document.metadata["title"] == "canonical"
+
+
+def test_list_task_refs_merges_legacy_in_progress_alias_without_duplicates(tmp_path):
+    workspace = _make_workspace(tmp_path)
+    legacy_dir = workspace / "tasks" / "in-progress"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    _write_task(legacy_dir / "legacy-only.md", "TASK-LEGACY")
+    _write_task(workspace / "tasks" / "in_progress" / "canonical.md", "TASK-CANON")
+    _write_task(legacy_dir / "duplicate.md", "TASK-DUP")
+    _write_task(workspace / "tasks" / "in_progress" / "duplicate.md", "TASK-DUP")
+
+    refs = list_task_refs(workspace)
+
+    in_progress_ids = [item.task_id for item in refs["in_progress"]]
+    assert in_progress_ids.count("TASK-DUP") == 1
+    assert set(in_progress_ids) == {"TASK-LEGACY", "TASK-CANON", "TASK-DUP"}
 
 
 def test_done_transition_clears_claim_metadata(tmp_path):

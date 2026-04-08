@@ -28,6 +28,9 @@ QUEUE_NAMES = (
     "done",
     "debt",
 )
+LEGACY_QUEUE_ALIASES = {
+    "in_progress": ("in-progress",),
+}
 DISPATCH_VISIBLE_QUEUES = ("backlog", "ready", "in_progress", "review", "done", "debt")
 PERSONA_QUEUES = {
     "philip": frozenset({"backlog", "ready", "debt"}),
@@ -67,6 +70,20 @@ def _isoformat(dt: datetime) -> str:
 def _task_dirs(workspace: Path) -> dict[str, Path]:
     tasks_root = workspace / "tasks"
     return {name: tasks_root / name for name in QUEUE_NAMES}
+
+
+def queue_dir_candidates(workspace: Path, queue: str) -> tuple[Path, ...]:
+    tasks_root = workspace / "tasks"
+    names = (queue, *LEGACY_QUEUE_ALIASES.get(queue, ()))
+    seen: set[Path] = set()
+    candidates: list[Path] = []
+    for name in names:
+        path = tasks_root / name
+        if path in seen:
+            continue
+        seen.add(path)
+        candidates.append(path)
+    return tuple(candidates)
 
 
 def _coerce_metadata(data: Any) -> dict[str, Any]:
@@ -215,15 +232,23 @@ def load_task_document(path: Path, queue: str) -> TaskDocument:
 def list_task_refs(workspace: str | Path | None = None) -> dict[str, list[TaskRef]]:
     workspace_path = Path(workspace or ".").resolve()
     queues: dict[str, list[TaskRef]] = {}
-    for queue, directory in _task_dirs(workspace_path).items():
+    for queue in QUEUE_NAMES:
         refs: list[TaskRef] = []
-        if directory.exists():
+        seen_keys: set[tuple[str, str]] = set()
+        for directory in queue_dir_candidates(workspace_path, queue):
+            if not directory.exists():
+                continue
             for path in sorted(
                 candidate
                 for candidate in directory.iterdir()
                 if candidate.is_file() and not candidate.name.startswith(".")
             ):
-                refs.append(load_task_document(path, queue).as_ref())
+                document = load_task_document(path, queue)
+                key = (document.task_id, document.filename)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                refs.append(document.as_ref())
         queues[queue] = refs
     return queues
 
@@ -231,17 +256,29 @@ def list_task_refs(workspace: str | Path | None = None) -> dict[str, list[TaskRe
 def locate_task(workspace: str | Path | None, task_id: str) -> TaskDocument:
     workspace_path = Path(workspace or ".").resolve()
     matches: list[TaskDocument] = []
-    for queue, directory in _task_dirs(workspace_path).items():
-        if not directory.exists():
-            continue
-        for path in directory.iterdir():
-            if not path.is_file() or path.name.startswith("."):
+    preferred_match: TaskDocument | None = None
+    for queue in QUEUE_NAMES:
+        for index, directory in enumerate(queue_dir_candidates(workspace_path, queue)):
+            if not directory.exists():
                 continue
-            document = load_task_document(path, queue)
-            if document.task_id == task_id or document.filename == task_id:
+            for path in directory.iterdir():
+                if not path.is_file() or path.name.startswith("."):
+                    continue
+                document = load_task_document(path, queue)
+                if document.task_id != task_id and document.filename != task_id:
+                    continue
+                if index == 0:
+                    preferred_match = document
                 matches.append(document)
     if not matches:
         raise MeridianWorkflowError(f"Task not found: {task_id}")
+    if preferred_match is not None:
+        equivalent_matches = [
+            match for match in matches
+            if match.task_id == preferred_match.task_id and match.queue == preferred_match.queue
+        ]
+        if equivalent_matches:
+            return preferred_match
     if len(matches) > 1:
         locations = ", ".join(str(match.path) for match in matches)
         raise MeridianWorkflowError(f"Task id is ambiguous across queues: {task_id} ({locations})")

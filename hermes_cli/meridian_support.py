@@ -15,6 +15,7 @@ import yaml
 
 from hermes_cli.config import load_config
 from hermes_cli.meridian_dispatcher import _resolve_workspace_path
+from hermes_cli.meridian_workflow import queue_dir_candidates
 
 
 ROLE_NAMES = ("philip", "fatih", "matthew")
@@ -370,29 +371,36 @@ def _git_headlines(workspace: Path, *, limit: int = 4) -> list[str]:
 
 
 def _recent_queue_items(workspace: Path, queue: str, *, limit: int = 3) -> list[str]:
-    queue_dir = workspace / "tasks" / queue
-    if not queue_dir.exists():
-        return []
-    items = [
-        path
-        for path in queue_dir.iterdir()
-        if path.is_file() and not path.name.startswith(".")
-    ]
+    items: list[Path] = []
+    seen_names: set[str] = set()
+    for queue_dir in queue_dir_candidates(workspace, queue):
+        if not queue_dir.exists():
+            continue
+        for path in queue_dir.iterdir():
+            if not path.is_file() or path.name.startswith(".") or path.name in seen_names:
+                continue
+            seen_names.add(path.name)
+            items.append(path)
     items.sort(key=lambda path: path.stat().st_mtime, reverse=True)
     return [path.name for path in items[:limit]]
 
 
 def _collect_local_workspace_summary(workspace: Path) -> dict[str, Any]:
+    def _queue_names(queue: str) -> list[str]:
+        names: list[str] = []
+        seen: set[str] = set()
+        for directory in queue_dir_candidates(workspace, queue):
+            if not directory.exists():
+                continue
+            for path in directory.iterdir():
+                if not path.is_file() or path.name.startswith(".") or path.name in seen:
+                    continue
+                seen.add(path.name)
+                names.append(path.name)
+        return sorted(names)
+
     queue_map = {
-        queue: sorted(
-            [
-                path.name
-                for path in (workspace / "tasks" / queue).iterdir()
-                if path.is_file() and not path.name.startswith(".")
-            ]
-        )
-        if (workspace / "tasks" / queue).exists()
-        else []
+        queue: _queue_names(queue)
         for queue in MERIDIAN_QUEUE_NAMES
     }
     return {
@@ -415,6 +423,7 @@ from pathlib import Path
 
 workspace = Path("__WORKSPACE__").expanduser()
 queues = ("backlog", "ready", "in_progress", "review", "waiting_human", "done", "debt")
+aliases = {"in_progress": ("in-progress",)}
 focus_topics = (
     ("Drawing widget", ("drawing", "geometry", "edit-operations", "editor")),
     ("Attribute table", ("attribute", "table")),
@@ -423,10 +432,18 @@ focus_topics = (
 )
 
 def queue_items(queue):
-    queue_dir = workspace / "tasks" / queue
-    if not queue_dir.exists():
-        return []
-    return [p for p in queue_dir.iterdir() if p.is_file() and not p.name.startswith(".")]
+    items = []
+    seen = set()
+    for name in (queue, *aliases.get(queue, ())):
+        queue_dir = workspace / "tasks" / name
+        if not queue_dir.exists():
+            continue
+        for path in queue_dir.iterdir():
+            if not path.is_file() or path.name.startswith(".") or path.name in seen:
+                continue
+            seen.add(path.name)
+            items.append(path)
+    return items
 
 queue_map = {
     queue: sorted(path.name for path in queue_items(queue))

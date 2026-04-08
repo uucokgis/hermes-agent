@@ -192,3 +192,30 @@ def test_build_roles_status_text_uses_ssh_probe_when_local_workspace_missing(mon
     assert "PHILIP-011-Fatih-COMPLETED.md" in text
     assert "MATTHEW-20260407-REVIEW-PASS-4-SUMMARY.md" in text
     assert "Attribute table" in text
+
+
+def test_build_roles_status_text_reads_legacy_in_progress_alias(tmp_path, monkeypatch):
+    workspace = _make_workspace(tmp_path)
+    legacy_dir = workspace / "tasks" / "in-progress"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    _touch_task(legacy_dir, "PHILIP-legacy-task.md")
+
+    monkeypatch.setattr(ms, "resolve_support_workspace", lambda _workspace=None: workspace)
+    monkeypatch.setattr(
+        ms,
+        "role_loop_state",
+        lambda role: {
+            "role": role,
+            "running": True,
+            "summary": f"{role} summary",
+            "pid": None,
+            "header": "",
+            "log_path": "",
+        },
+    )
+    monkeypatch.setattr(ms, "_git_headlines", lambda _workspace, limit=4: [])
+
+    text = ms.build_roles_status_text()
+
+    assert "in_progress=1" in text
+    assert "PHILIP-legacy-task.md" in text
