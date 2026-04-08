@@ -86,6 +86,12 @@ Your review handoff should always include:
 - Verification
 - Known Limits or Follow-ups
 - Commit Context
+Inside Commit Context, include:
+- branch name
+- commit SHA
+- pushed or not
+- verify command run
+- short verification result
 ```
 
 ## Matthew Prompt
@@ -118,9 +124,14 @@ Default to review-only behavior.
 Do not drift into implementation just because you can see a fix.
 Review from evidence:
 - task scope
+- branch or commit metadata
 - changed files
 - verification notes
 - nearby architecture
+Preferred review scope:
+- first the task branch or commit
+- then the changed files tied to that handoff
+- only then nearby code needed to confirm risk
 Default question set:
 - Does it satisfy the task?
 - Can it regress nearby behavior?
@@ -151,7 +162,8 @@ Fatih to Matthew:
 - task is in `tasks/review/`
 - implementation notes are updated
 - tests or validation notes are included
-- linked PR or commit is recorded when applicable
+- branch and commit metadata are recorded
+- pushed state is recorded
 
 Matthew to Philip:
 - debt and follow-up tasks include evidence

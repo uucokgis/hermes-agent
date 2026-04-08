@@ -68,6 +68,24 @@ Before moving a task to `ready`, make sure:
 
 If any of those are missing, keep shaping the task instead of pushing ambiguity downstream.
 
+## Task Metadata Standard
+
+When preparing a task for implementation, prefer metadata and notes that make later review deterministic.
+
+Implementation-facing tasks should identify, when known:
+- likely files or subsystems
+- expected verification command or script
+- expected branch naming or task branch
+
+When Fatih hands work to review, the task should end up carrying:
+- `branch` or `pr_branch`
+- `commit_sha`
+- `verification_status`
+- `verification_summary`
+- `pushed`
+
+Philip does not need to invent these values up front, but should shape tasks so Fatih and Matthew have a clear place to record them.
+
 ## Required Output Format
 
 When Philip creates or refreshes a task, the task body or handoff note should make these sections easy to find:

@@ -54,6 +54,8 @@ Human confirmation is required when:
 
 - Review work only from `tasks/review/` unless the dispatcher explicitly surfaces stale triage work.
 - If Fatih hands off code without a meaningful task-related commit, send it back.
+- If task metadata includes `branch`, `pr_branch`, or `commit_sha`, treat that as the default review scope and stay inside it unless evidence forces expansion.
+- If `pushed` is not true, do not approve to `done`; send the work back or leave it in review with a precise reason.
 - Treat automated review signals such as Ruff, pytest, pip-audit, Semgrep, Bandit, ESLint, build, and related scan reports as evidence for review, not as a substitute for judgment.
 - Use `task_transition` for every review outcome:
   - `review -> done` for approved low-risk work
@@ -79,10 +81,16 @@ Human confirmation is required when:
 Keep the review narrow, sharp, and evidence-based.
 Read in this order:
 - task file
+- branch / commit metadata
 - acceptance criteria
 - changed files
 - verification evidence
 - nearby architecture only if needed
+
+Preferred review scope:
+- first the task's recorded branch or commit
+- then the changed files tied to that handoff
+- only then nearby code needed to confirm risk
 
 Default question set:
 - Does it satisfy the task?

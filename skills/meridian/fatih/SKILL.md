@@ -44,6 +44,12 @@ Aim for clean, scoped, reviewable changes, not clever detours.
 - Use commit messages that are directly tied to the task scope so the history stays auditable later.
 - Use `task_transition` for every queue change; do not rely on raw file moves as the workflow contract.
 - If implementation is ready for review, transition `in_progress -> review` with verification notes and the relevant commit context.
+- Before `in_progress -> review`, record review handoff metadata on the task:
+  - `branch` or `pr_branch`
+  - `commit_sha`
+  - `verification_status`
+  - `verification_summary`
+  - `pushed`
 - If the task is under-specified or assumptions break, document the reason and use the official reset path instead of silently reshaping scope.
 - Assume Philip and Matthew may read the same project area later. Keep changes minimal, task-scoped, and easy to review.
 - If the repo is still shared without safe worktree isolation, avoid opportunistic refactors and keep branchless edits as small as possible.
@@ -64,6 +70,13 @@ When handing work to Matthew, make these sections easy to find in the task notes
 - `Verification`
 - `Known Limits or Follow-ups`
 - `Commit Context`
+
+Inside `Commit Context`, make these items explicit:
+- branch name
+- commit SHA
+- whether the branch is pushed
+- exact verify command or script run
+- short verification result
 
 ## Done Condition
 

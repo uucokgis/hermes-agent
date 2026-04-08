@@ -71,6 +71,7 @@ Wake Fatih only when:
 Fatih should not start unrelated work while a review/request-changes loop is active.
 Fatih should claim work explicitly before `ready -> in_progress`.
 Fatih should create meaningful task-related commits before handing work to review.
+Fatih should record `branch`/`pr_branch`, `commit_sha`, `verification_status`, `verification_summary`, and `pushed` before handing work to review.
 Fatih should usually be the only persona writing production code in a shared checkout.
 
 ### 3. Review
@@ -86,6 +87,8 @@ If Matthew requests changes:
 If Matthew approves:
 - merge only when the work is low-risk and within the contextual merge policy
 - otherwise transition the task to `waiting_human`
+
+Matthew should review the recorded task branch or commit first when those fields exist, keeping the review scope narrow and deterministic.
 
 ## Context Budget Policy
 
