@@ -213,6 +213,57 @@ def test_meridian_task_command_without_args_prompts_waiting_tasks(monkeypatch):
     assert result == "task prompt"
 
 
+def test_meridian_task_detail_includes_review_and_quality_briefs(tmp_path, monkeypatch):
+    runner = _make_runner()
+    workspace = tmp_path / "workspace"
+    (workspace / "tasks" / "review").mkdir(parents=True, exist_ok=True)
+    task_path = workspace / "tasks" / "review" / "task-1.md"
+    task_path.write_text(
+        "---\n"
+        "id: TASK-1\n"
+        "title: Task 1\n"
+        "status: review\n"
+        "updated_at: 2026-04-08T01:00:00+00:00\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    review_dir = workspace / "tasks" / "review" / "decisions"
+    review_dir.mkdir(parents=True, exist_ok=True)
+    (review_dir / "TASK-1-decision.md").write_text(
+        "---\n"
+        "review_schema_version: 1\n"
+        "review_id: REVIEW-20260408-001\n"
+        "review_task_id: TASK-1\n"
+        "review_kind: decision\n"
+        "review_outcome: request_changes\n"
+        "decision_bucket: blocking\n"
+        "reviewer: matthew\n"
+        "status: final\n"
+        "required_actions:\n"
+        "  - id: RA-1\n"
+        "    summary: Fix regression\n"
+        "    status: open\n"
+        "updated_at: 2026-04-08T02:00:00+00:00\n"
+        "summary: Regression found during review\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "hermes_cli.meridian_support.resolve_support_workspace",
+        lambda _workspace=None: workspace,
+    )
+    monkeypatch.setattr(
+        "hermes_cli.meridian_quality.quality_brief_for_task",
+        lambda _task_id: "Quality gate: `review` | review=1",
+    )
+
+    result = runner._meridian_task_detail("TASK-1")
+
+    assert "Quality gate: `review`" in result
+    assert "Review decision: `request_changes`" in result
+    assert "open_actions: `1`" in result
+
+
 def test_pending_meridian_ask_flow_collects_role_then_message(monkeypatch):
     runner = _make_runner()
     runner._pending_meridian_flows = {"agent:main:telegram:dm:c1:u1": {"kind": "ask", "step": "role", "created_at": 9999999999}}
