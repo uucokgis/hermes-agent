@@ -9,6 +9,7 @@ from hermes_cli.meridian_review import (
     MeridianReviewError,
     latest_review_decision,
     parse_review_decision,
+    review_detail_lines_for_task,
     review_brief_for_task,
 )
 
@@ -114,3 +115,40 @@ def test_latest_review_decision_reads_decisions_subdirectory_first(tmp_path):
 
     assert decision is not None
     assert decision.metadata["review_id"] == "REVIEW-CURRENT"
+
+
+def test_parse_review_decision_validates_transition_recommendation(tmp_path):
+    path = tmp_path / "decision.md"
+    _write_review(
+        path,
+        _decision_metadata(
+            transition_recommendation={"from_queue": "review", "to_queue": "not-a-queue"},
+        ),
+    )
+
+    with pytest.raises(MeridianReviewError, match="Invalid transition_recommendation.to_queue"):
+        parse_review_decision(path)
+
+
+def test_review_detail_lines_include_transition_and_open_actions(tmp_path):
+    workspace = tmp_path / "workspace"
+    review_dir = workspace / "tasks" / "review" / "decisions"
+    _write_review(
+        review_dir / "TASK-1-decision.md",
+        _decision_metadata(
+            transition_recommendation={"from_queue": "review", "to_queue": "in_progress"},
+            required_actions=[
+                {"id": "RA-1", "summary": "Fix regression", "severity": "blocking", "owner": "fatih", "status": "open"},
+                {"id": "RA-2", "summary": "Add regression test", "severity": "review", "owner": "fatih", "status": "open"},
+                {"id": "RA-3", "summary": "Document edge case", "severity": "advisory", "owner": "philip", "status": "open"},
+                {"id": "RA-4", "summary": "Already done", "severity": "review", "owner": "fatih", "status": "done"},
+            ],
+        ),
+    )
+
+    lines = review_detail_lines_for_task("TASK-1", workspace, max_actions=2)
+
+    assert lines[0] == "Recommended transition: `review -> in_progress`"
+    assert any("Fix regression" in line for line in lines)
+    assert any("Add regression test" in line for line in lines)
+    assert any("+1 more open review action(s)" in line for line in lines)

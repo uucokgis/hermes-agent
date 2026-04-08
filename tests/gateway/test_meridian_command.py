@@ -242,7 +242,12 @@ def test_meridian_task_detail_includes_review_and_quality_briefs(tmp_path, monke
         "required_actions:\n"
         "  - id: RA-1\n"
         "    summary: Fix regression\n"
+        "    severity: blocking\n"
+        "    owner: fatih\n"
         "    status: open\n"
+        "transition_recommendation:\n"
+        "  from_queue: review\n"
+        "  to_queue: in_progress\n"
         "updated_at: 2026-04-08T02:00:00+00:00\n"
         "summary: Regression found during review\n"
         "---\n",
@@ -262,6 +267,8 @@ def test_meridian_task_detail_includes_review_and_quality_briefs(tmp_path, monke
     assert "Quality gate: `review`" in result
     assert "Review decision: `request_changes`" in result
     assert "open_actions: `1`" in result
+    assert "Recommended transition: `review -> in_progress`" in result
+    assert "[blocking] Fix regression" in result
 
 
 def test_pending_meridian_ask_flow_collects_role_then_message(monkeypatch):

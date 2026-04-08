@@ -3505,7 +3505,7 @@ class GatewayRunner:
 
     def _meridian_task_detail(self, task_id: str) -> str:
         from hermes_cli.meridian_quality import quality_brief_for_task
-        from hermes_cli.meridian_review import review_brief_for_task
+        from hermes_cli.meridian_review import review_brief_for_task, review_detail_lines_for_task
         from hermes_cli.meridian_support import resolve_support_workspace
         from hermes_cli.meridian_workflow import locate_task
 
@@ -3535,6 +3535,9 @@ class GatewayRunner:
         review_brief = review_brief_for_task(document.task_id, workspace)
         if review_brief:
             lines.extend(["", review_brief])
+        review_detail_lines = review_detail_lines_for_task(document.task_id, workspace)
+        if review_detail_lines:
+            lines.extend(review_detail_lines)
         if history:
             lines.extend(["", "**Recent history**"])
             for item in history[-4:]:

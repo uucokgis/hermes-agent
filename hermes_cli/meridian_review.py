@@ -28,6 +28,7 @@ REVIEW_KIND_VALUES = frozenset({"decision", "patrol", "triage"})
 REVIEW_OUTCOME_VALUES = frozenset({"approved", "request_changes", "blocked", "debt_only", "needs_human"})
 DECISION_BUCKET_VALUES = frozenset({"passed", "advisory", "review", "blocking"})
 REVIEW_STATUS_VALUES = frozenset({"draft", "final", "superseded", "archived"})
+TRANSITION_QUEUE_VALUES = frozenset({"backlog", "ready", "in_progress", "review", "waiting_human", "done", "debt"})
 DECISION_FILENAMES = (
     "APPROVAL",
     "REQUEST-CHANGES",
@@ -66,6 +67,22 @@ class MeridianReviewDecision:
     @property
     def updated_at(self) -> str:
         return str(self.metadata["updated_at"])
+
+    @property
+    def required_actions(self) -> list[dict[str, Any]]:
+        return [item for item in self.metadata.get("required_actions", []) if isinstance(item, dict)]
+
+    @property
+    def open_actions(self) -> list[dict[str, Any]]:
+        return [
+            item for item in self.required_actions
+            if str(item.get("status") or "open").strip().lower() not in {"done", "closed"}
+        ]
+
+    @property
+    def transition_recommendation(self) -> dict[str, Any]:
+        value = self.metadata.get("transition_recommendation")
+        return value if isinstance(value, dict) else {}
 
 
 def _split_frontmatter(content: str) -> tuple[dict[str, Any], str]:
@@ -120,6 +137,21 @@ def parse_review_decision(path: str | Path) -> MeridianReviewDecision:
         raise MeridianReviewError(f"Invalid review status in {review_path}")
     if not isinstance(metadata.get("required_actions"), list):
         raise MeridianReviewError(f"required_actions must be a list in {review_path}")
+    for index, item in enumerate(metadata.get("required_actions") or []):
+        if not isinstance(item, dict):
+            raise MeridianReviewError(f"required_actions[{index}] must be a mapping in {review_path}")
+        if not str(item.get("summary") or "").strip():
+            raise MeridianReviewError(f"required_actions[{index}] is missing summary in {review_path}")
+    transition = metadata.get("transition_recommendation")
+    if transition is not None:
+        if not isinstance(transition, dict):
+            raise MeridianReviewError(f"transition_recommendation must be a mapping in {review_path}")
+        from_queue = str(transition.get("from_queue") or "").strip()
+        to_queue = str(transition.get("to_queue") or "").strip()
+        if from_queue and from_queue not in TRANSITION_QUEUE_VALUES:
+            raise MeridianReviewError(f"Invalid transition_recommendation.from_queue in {review_path}")
+        if to_queue and to_queue not in TRANSITION_QUEUE_VALUES:
+            raise MeridianReviewError(f"Invalid transition_recommendation.to_queue in {review_path}")
     updated_at = metadata.get("updated_at")
     if isinstance(updated_at, datetime):
         metadata["updated_at"] = updated_at.isoformat()
@@ -171,11 +203,7 @@ def review_brief_for_task(task_id: str, workspace: str | Path | None) -> str:
     decision = latest_review_decision(task_id, workspace)
     if not decision:
         return ""
-    actions = decision.metadata.get("required_actions") or []
-    open_actions = 0
-    for item in actions:
-        if isinstance(item, dict) and str(item.get("status") or "open").strip().lower() not in {"done", "closed"}:
-            open_actions += 1
+    open_actions = len(decision.open_actions)
     summary = str(decision.metadata.get("summary") or "").strip()
     summary_part = f" | {summary}" if summary else ""
     return (
@@ -185,3 +213,26 @@ def review_brief_for_task(task_id: str, workspace: str | Path | None) -> str:
         f" | open_actions: `{open_actions}`"
         f"{summary_part}"
     )
+
+
+def review_detail_lines_for_task(task_id: str, workspace: str | Path | None, *, max_actions: int = 3) -> list[str]:
+    decision = latest_review_decision(task_id, workspace)
+    if not decision:
+        return []
+    lines: list[str] = []
+    transition = decision.transition_recommendation
+    from_queue = str(transition.get("from_queue") or "").strip()
+    to_queue = str(transition.get("to_queue") or "").strip()
+    if from_queue or to_queue:
+        transition_text = f"{from_queue or '?'} -> {to_queue or '?'}"
+        lines.append(f"Recommended transition: `{transition_text}`")
+    for action in decision.open_actions[:max_actions]:
+        severity = str(action.get("severity") or "open").strip()
+        summary = str(action.get("summary") or "").strip()
+        owner = str(action.get("owner") or "").strip()
+        owner_part = f" | owner: `{owner}`" if owner else ""
+        lines.append(f"- [{severity}] {summary}{owner_part}")
+    remaining = len(decision.open_actions) - max_actions
+    if remaining > 0:
+        lines.append(f"- +{remaining} more open review action(s)")
+    return lines
