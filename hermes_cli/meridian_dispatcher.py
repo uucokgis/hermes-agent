@@ -36,6 +36,12 @@ from hermes_cli.meridian_workflow import (
 )
 from hermes_cli.config import load_config
 from hermes_cli.meridian_quality import latest_quality_result, run_quality_gate_once, format_quality_status
+from hermes_cli.meridian_maintenance import (
+    format_in_progress_migration,
+    format_meridian_doctor_report,
+    meridian_doctor_report,
+    migrate_in_progress_queue,
+)
 from hermes_cli.meridian_review import latest_review_decision
 from hermes_utils import atomic_json_write
 
@@ -927,6 +933,11 @@ def _print_status(snapshot: dict[str, Any]) -> None:
         print(f"  Active leases:  {len(worker_leases)}")
     if snapshot.get("drift_detected"):
         print("  Drift detected: yes")
+    workspace = snapshot.get("workspace")
+    if workspace:
+        doctor = meridian_doctor_report(workspace)
+        if not doctor.get("healthy"):
+            print("  Maintenance:   issues detected (run `hermes meridian doctor`)")
     recent_events = _recent_meridian_events(limit=5)
     if recent_events:
         print("  Recent events:")
@@ -1193,6 +1204,21 @@ def meridian_command(args) -> int:
                 print("No new review-triggered quality scans were needed.")
             return 0
         print(format_quality_status(task_id))
+        return 0
+
+    if subcommand == "doctor":
+        print(format_meridian_doctor_report(meridian_doctor_report(_resolve_workspace_path(workspace))))
+        return 0
+
+    if subcommand == "migrate":
+        print(
+            format_in_progress_migration(
+                migrate_in_progress_queue(
+                    _resolve_workspace_path(workspace),
+                    apply=bool(getattr(args, "apply", False)),
+                )
+            )
+        )
         return 0
 
     snapshot = persist_meridian_snapshot(

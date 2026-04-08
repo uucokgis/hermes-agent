@@ -673,6 +673,24 @@ def test_meridian_command_status_prints_expected_fields(tmp_path, monkeypatch, c
     assert "task_transitioned" in out
 
 
+def test_meridian_command_status_surfaces_maintenance_warning(tmp_path, monkeypatch, capsys):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    state_path = tmp_path / ".hermes" / "meridian" / "workflow_state.json"
+    monkeypatch.setattr(md, "STATE_PATH", state_path)
+
+    _write_task(workspace / "tasks" / "backlog" / "backlog-task.md", "TASK-B")
+    _write_task(workspace / "tasks" / "in-progress" / "legacy-task.md", "TASK-LEGACY")
+
+    rc = md.meridian_command(Namespace(meridian_command="status", workspace=str(workspace)))
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Maintenance:" in out
+    assert "issues detected" in out
+
+
 def test_meridian_command_stale_prints_stale_tasks(tmp_path, monkeypatch, capsys):
     from hermes_cli import meridian_dispatcher as md
 
@@ -763,6 +781,37 @@ def test_meridian_command_history_prints_workflow_history(tmp_path, monkeypatch,
     assert "TASK-1" in out
     assert "task_claimed" in out
     assert "task_transitioned" in out
+
+
+def test_meridian_command_doctor_prints_report(tmp_path, monkeypatch, capsys):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    _write_task(workspace / "tasks" / "in-progress" / "legacy-task.md", "TASK-LEGACY")
+
+    rc = md.meridian_command(Namespace(meridian_command="doctor", workspace=str(workspace)))
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Meridian doctor" in out
+    assert "legacy_in_progress=1" in out
+
+
+def test_meridian_command_migrate_dry_run_prints_preview(tmp_path, monkeypatch, capsys):
+    from hermes_cli import meridian_dispatcher as md
+
+    workspace = _make_workspace(tmp_path)
+    _write_task(workspace / "tasks" / "in-progress" / "legacy-task.md", "TASK-LEGACY")
+
+    rc = md.meridian_command(
+        Namespace(meridian_command="migrate", workspace=str(workspace), apply=False)
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Meridian in-progress migration" in out
+    assert "would_move" in out
+    assert (workspace / "tasks" / "in-progress" / "legacy-task.md").exists()
 
 
 def test_main_routes_meridian_status_subcommand(monkeypatch):
@@ -864,6 +913,62 @@ def test_main_routes_meridian_go_subcommand(monkeypatch):
         "idle_sleep": 20.0,
         "max_passes": 3,
         "once": True,
+    }
+
+
+def test_main_routes_meridian_doctor_subcommand(monkeypatch):
+    import sys
+    import hermes_cli.main as main_mod
+
+    captured = {}
+
+    def fake_cmd_meridian(args):
+        captured["command"] = args.command
+        captured["subcommand"] = args.meridian_command
+        captured["workspace"] = args.workspace
+
+    monkeypatch.setattr(main_mod, "cmd_meridian", fake_cmd_meridian)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["hermes", "meridian", "doctor", "--workspace", "/tmp/meridian-workspace"],
+    )
+
+    main_mod.main()
+
+    assert captured == {
+        "command": "meridian",
+        "subcommand": "doctor",
+        "workspace": "/tmp/meridian-workspace",
+    }
+
+
+def test_main_routes_meridian_migrate_subcommand(monkeypatch):
+    import sys
+    import hermes_cli.main as main_mod
+
+    captured = {}
+
+    def fake_cmd_meridian(args):
+        captured["command"] = args.command
+        captured["subcommand"] = args.meridian_command
+        captured["workspace"] = args.workspace
+        captured["apply"] = args.apply
+
+    monkeypatch.setattr(main_mod, "cmd_meridian", fake_cmd_meridian)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["hermes", "meridian", "migrate", "--workspace", "/tmp/meridian-workspace", "--apply"],
+    )
+
+    main_mod.main()
+
+    assert captured == {
+        "command": "meridian",
+        "subcommand": "migrate",
+        "workspace": "/tmp/meridian-workspace",
+        "apply": True,
     }
 
 

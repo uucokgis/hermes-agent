@@ -4563,6 +4563,31 @@ For more help on a command:
         help="Force a scan even if no new review event was observed",
     )
 
+    meridian_doctor = meridian_subparsers.add_parser(
+        "doctor",
+        help="Show Meridian queue drift and migration diagnostics",
+    )
+    meridian_doctor.add_argument(
+        "--workspace",
+        default=None,
+        help="Workspace root containing the tasks/ directory (default: auto-discover Meridian workspace)",
+    )
+
+    meridian_migrate = meridian_subparsers.add_parser(
+        "migrate",
+        help="Migrate legacy Meridian queue aliases into canonical locations",
+    )
+    meridian_migrate.add_argument(
+        "--workspace",
+        default=None,
+        help="Workspace root containing the tasks/ directory (default: auto-discover Meridian workspace)",
+    )
+    meridian_migrate.add_argument(
+        "--apply",
+        action="store_true",
+        help="Perform the migration; otherwise show a dry-run preview",
+    )
+
     meridian_parser.set_defaults(func=cmd_meridian)
 
     # =========================================================================
