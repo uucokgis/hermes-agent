@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import time
@@ -26,6 +27,36 @@ from hermes_cli.meridian_runtime import EVENT_LOG_PATH, emit_meridian_event, par
 DEFAULT_REMOTE_WORKSPACE = "/home/umut/meridian"
 DEFAULT_EVENT_TYPES = frozenset({"task_transitioned"})
 DEFAULT_REVIEW_QUEUE = "review"
+SEVERITY_ORDER = {"blocking": 0, "review": 1, "debt": 2, "advisory": 3, "passed": 4, "skipped": 5}
+SECTION_HEADER_RE = re.compile(r"^-- (?P<section>.+?) --$")
+PIP_AUDIT_ROW_RE = re.compile(r"^(?P<name>\S+)\s+(?P<version>\S+)\s+(?P<id>\S+)\s+(?P<fix>.+)$")
+BANDIT_SEVERITY_RE = re.compile(r"Severity:\s+(Low|Medium|High)", re.IGNORECASE)
+SEMGREP_FINDING_RE = re.compile(r"^\s+❯❱\s+(?P<rule>[\w\.\-]+)")
+
+BLOCKING_SEMGREP_RULE_FRAGMENTS = (
+    "sql-injection",
+    "command-injection",
+    "insecure-deserialization",
+    "path-traversal",
+    "unvalidated-password",
+    "auth-bypass",
+    "jwt-none-alg",
+)
+REVIEW_SEMGREP_RULE_FRAGMENTS = (
+    "insecure-hash-algorithms-md5",
+    "request-with-http",
+    "var-in-href",
+    "dangerous-subprocess-use",
+)
+CRITICAL_DEPENDENCY_PACKAGES = frozenset(
+    {
+        "django",
+        "djangorestframework",
+        "djangorestframework-simplejwt",
+        "cryptography",
+        "pillow",
+    }
+)
 
 LANE_DEFINITIONS: tuple[dict[str, str], ...] = (
     {
@@ -315,6 +346,328 @@ def _summarize_lanes(lanes: list[dict[str, Any]]) -> dict[str, int]:
     return summary
 
 
+def _extract_sections(output: str) -> dict[str, str]:
+    sections: dict[str, list[str]] = {}
+    current = "general"
+    sections[current] = []
+    for line in (output or "").splitlines():
+        match = SECTION_HEADER_RE.match(line.strip())
+        if match:
+            current = match.group("section").strip().lower()
+            sections.setdefault(current, [])
+            continue
+        sections.setdefault(current, []).append(line)
+    return {name: "\n".join(lines).strip() for name, lines in sections.items()}
+
+
+def _make_finding(*, bucket: str, summary: str, evidence: str, source: str) -> dict[str, str]:
+    return {
+        "bucket": bucket,
+        "summary": summary,
+        "evidence": evidence,
+        "source": source,
+    }
+
+
+def _classify_backend_quality(lane: dict[str, Any]) -> list[dict[str, str]]:
+    if lane.get("status") == "passed":
+        return [_make_finding(bucket="passed", summary="Backend quality checks passed", evidence="", source=lane["name"])]
+    findings: list[dict[str, str]] = []
+    sections = _extract_sections(lane.get("output") or "")
+    pytest_output = sections.get("pytest", "")
+    if pytest_output:
+        findings.append(
+            _make_finding(
+                bucket="blocking",
+                summary="Pytest failed in backend quality gate",
+                evidence=_trim_output(pytest_output, max_lines=16, max_chars=1200),
+                source="backend-quality:pytest",
+            )
+        )
+    ruff_bits = []
+    for key in ("ruff format --check", "ruff lint"):
+        if sections.get(key):
+            ruff_bits.append(_trim_output(sections[key], max_lines=12, max_chars=900))
+    if ruff_bits:
+        findings.append(
+            _make_finding(
+                bucket="review",
+                summary="Ruff reported backend style or lint issues",
+                evidence="\n\n".join(bit for bit in ruff_bits if bit),
+                source="backend-quality:ruff",
+            )
+        )
+    if not findings:
+        findings.append(
+            _make_finding(
+                bucket="review",
+                summary="Backend quality gate failed",
+                evidence=_trim_output(lane.get("output") or "", max_lines=20, max_chars=1200),
+                source=lane["name"],
+            )
+        )
+    return findings
+
+
+def _classify_pip_audit(section_output: str) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    rows: list[tuple[str, str, str, str]] = []
+    for raw in section_output.splitlines():
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("Found ") or stripped.startswith("Name") or stripped.startswith("-"):
+            continue
+        match = PIP_AUDIT_ROW_RE.match(stripped)
+        if not match:
+            continue
+        rows.append((match.group("name"), match.group("version"), match.group("id"), match.group("fix").strip()))
+    if not rows:
+        return findings
+    blocking_rows = [row for row in rows if row[0].lower() in CRITICAL_DEPENDENCY_PACKAGES]
+    debt_rows = [row for row in rows if row not in blocking_rows]
+    if blocking_rows:
+        lines = [f"{name} {version} {vuln_id} -> {fix}" for name, version, vuln_id, fix in blocking_rows[:8]]
+        findings.append(
+            _make_finding(
+                bucket="review",
+                summary=f"Dependency vulnerabilities found in critical runtime packages ({len(blocking_rows)})",
+                evidence="\n".join(lines),
+                source="backend-security:pip-audit",
+            )
+        )
+    if debt_rows:
+        lines = [f"{name} {version} {vuln_id} -> {fix}" for name, version, vuln_id, fix in debt_rows[:8]]
+        findings.append(
+            _make_finding(
+                bucket="debt",
+                summary=f"Dependency vulnerability backlog detected ({len(debt_rows)})",
+                evidence="\n".join(lines),
+                source="backend-security:pip-audit",
+            )
+        )
+    return findings
+
+
+def _classify_bandit(section_output: str) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    severity_counts = {"high": 0, "medium": 0, "low": 0}
+    interesting_lines: list[str] = []
+    for line in section_output.splitlines():
+        match = BANDIT_SEVERITY_RE.search(line)
+        if match:
+            severity = match.group(1).lower()
+            severity_counts[severity] += 1
+        if "Location:" in line or "Issue:" in line:
+            interesting_lines.append(line.strip())
+    if severity_counts["high"]:
+        findings.append(
+            _make_finding(
+                bucket="blocking",
+                summary=f"Bandit reported {severity_counts['high']} high-severity finding(s)",
+                evidence="\n".join(interesting_lines[:10]),
+                source="backend-security:bandit",
+            )
+        )
+    if severity_counts["medium"]:
+        findings.append(
+            _make_finding(
+                bucket="review",
+                summary=f"Bandit reported {severity_counts['medium']} medium-severity finding(s)",
+                evidence="\n".join(interesting_lines[:10]),
+                source="backend-security:bandit",
+            )
+        )
+    if severity_counts["low"]:
+        findings.append(
+            _make_finding(
+                bucket="advisory",
+                summary=f"Bandit reported {severity_counts['low']} low-severity finding(s)",
+                evidence="\n".join(interesting_lines[:10]),
+                source="backend-security:bandit",
+            )
+        )
+    return findings
+
+
+def _semgrep_bucket(rule: str) -> str:
+    lowered = rule.lower()
+    if any(fragment in lowered for fragment in BLOCKING_SEMGREP_RULE_FRAGMENTS):
+        return "blocking"
+    if any(fragment in lowered for fragment in REVIEW_SEMGREP_RULE_FRAGMENTS):
+        return "review"
+    return "review"
+
+
+def _classify_semgrep(section_output: str) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    buckets: dict[str, list[str]] = {"blocking": [], "review": [], "advisory": []}
+    current_file = ""
+    for line in section_output.splitlines():
+        stripped = line.rstrip()
+        if stripped.startswith("apps/") or stripped.startswith("config/"):
+            current_file = stripped.strip()
+            continue
+        match = SEMGREP_FINDING_RE.match(stripped)
+        if not match:
+            continue
+        rule = match.group("rule")
+        bucket = _semgrep_bucket(rule)
+        entry = f"{rule} ({current_file or 'unknown file'})"
+        buckets[bucket].append(entry)
+    for bucket in ("blocking", "review", "advisory"):
+        if buckets[bucket]:
+            findings.append(
+                _make_finding(
+                    bucket=bucket,
+                    summary=f"Semgrep produced {len(buckets[bucket])} {bucket} finding(s)",
+                    evidence="\n".join(buckets[bucket][:10]),
+                    source="backend-security:semgrep",
+                )
+            )
+    return findings
+
+
+def _classify_backend_security(lane: dict[str, Any]) -> list[dict[str, str]]:
+    if lane.get("status") == "passed":
+        return [_make_finding(bucket="passed", summary="Backend security checks passed", evidence="", source=lane["name"])]
+    findings: list[dict[str, str]] = []
+    sections = _extract_sections(lane.get("output") or "")
+    findings.extend(_classify_pip_audit(sections.get("pip-audit", "")))
+    findings.extend(_classify_bandit(sections.get("bandit", "")))
+    findings.extend(_classify_semgrep(sections.get("semgrep", "")))
+    if not findings:
+        findings.append(
+            _make_finding(
+                bucket="review",
+                summary="Backend security gate failed",
+                evidence=_trim_output(lane.get("output") or "", max_lines=20, max_chars=1200),
+                source=lane["name"],
+            )
+        )
+    return findings
+
+
+def _classify_frontend_lint(lane: dict[str, Any]) -> list[dict[str, str]]:
+    if lane.get("status") == "passed":
+        return [_make_finding(bucket="passed", summary="Frontend lint passed", evidence="", source=lane["name"])]
+    return [
+        _make_finding(
+            bucket="review",
+            summary="Frontend lint reported issues",
+            evidence=_trim_output(lane.get("output") or "", max_lines=16, max_chars=1200),
+            source=lane["name"],
+        )
+    ]
+
+
+def _classify_frontend_build(lane: dict[str, Any]) -> list[dict[str, str]]:
+    if lane.get("status") == "passed":
+        return [_make_finding(bucket="passed", summary="Frontend build passed", evidence="", source=lane["name"])]
+    return [
+        _make_finding(
+            bucket="blocking",
+            summary="Frontend build failed",
+            evidence=_trim_output(lane.get("output") or "", max_lines=16, max_chars=1200),
+            source=lane["name"],
+        )
+    ]
+
+
+def _classify_frontend_security(lane: dict[str, Any]) -> list[dict[str, str]]:
+    if lane.get("status") == "passed":
+        return [_make_finding(bucket="passed", summary="Frontend security checks passed", evidence="", source=lane["name"])]
+    output = lane.get("output") or ""
+    bucket = "review" if "critical" in output.lower() or "high" in output.lower() else "debt"
+    return [
+        _make_finding(
+            bucket=bucket,
+            summary="Frontend security checks reported findings",
+            evidence=_trim_output(output, max_lines=16, max_chars=1200),
+            source=lane["name"],
+        )
+    ]
+
+
+def _lane_findings(lane: dict[str, Any]) -> list[dict[str, str]]:
+    name = lane.get("name")
+    if name == "backend-quality":
+        return _classify_backend_quality(lane)
+    if name == "backend-security":
+        return _classify_backend_security(lane)
+    if name == "frontend-lint":
+        return _classify_frontend_lint(lane)
+    if name == "frontend-build":
+        return _classify_frontend_build(lane)
+    if name == "frontend-security":
+        return _classify_frontend_security(lane)
+    if lane.get("status") == "passed":
+        return [_make_finding(bucket="passed", summary=f"{name} passed", evidence="", source=str(name))]
+    if lane.get("status") == "skipped":
+        return [_make_finding(bucket="skipped", summary=f"{name} skipped", evidence="", source=str(name))]
+    return [
+        _make_finding(
+            bucket="review",
+            summary=f"{name} failed",
+            evidence=_trim_output(lane.get("output") or "", max_lines=16, max_chars=1200),
+            source=str(name),
+        )
+    ]
+
+
+def _normalize_findings(lanes: list[dict[str, Any]]) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    for lane in lanes:
+        findings.extend(_lane_findings(lane))
+    return findings
+
+
+def _bucket_counts(findings: list[dict[str, str]]) -> dict[str, int]:
+    counts = {"blocking": 0, "review": 0, "debt": 0, "advisory": 0, "passed": 0, "skipped": 0}
+    for finding in findings:
+        bucket = finding.get("bucket", "review")
+        counts[bucket] = counts.get(bucket, 0) + 1
+    return counts
+
+
+def _overall_decision(findings: list[dict[str, str]]) -> str:
+    counts = _bucket_counts(findings)
+    if counts["blocking"]:
+        return "blocking"
+    if counts["review"]:
+        return "review"
+    if counts["debt"]:
+        return "debt"
+    if counts["advisory"]:
+        return "advisory"
+    if counts["passed"]:
+        return "passed"
+    return "skipped"
+
+
+def _normalized_summary(findings: list[dict[str, str]]) -> str:
+    counts = _bucket_counts(findings)
+    parts = []
+    for bucket in ("blocking", "review", "debt", "advisory"):
+        if counts[bucket]:
+            parts.append(f"{bucket}={counts[bucket]}")
+    if not parts and counts["passed"]:
+        parts.append("passed")
+    if not parts and counts["skipped"]:
+        parts.append("skipped")
+    return " ".join(parts) if parts else "no findings"
+
+
+def _policy_lines() -> list[str]:
+    return [
+        "- `backend-quality / pytest fail` -> `blocking`",
+        "- `frontend-build fail` -> `blocking`",
+        "- `lint/ruff/eslint fail` -> `review`",
+        "- `pip-audit` critical runtime packages -> `review`, remaining dependency backlog -> `debt`",
+        "- `Bandit` high -> `blocking`, medium -> `review`, low -> `advisory`",
+        "- `Semgrep` injection/auth/password rules -> `blocking`, weaker security smells -> `review`",
+        "- `frontend security` findings -> `review` when severity words imply risk, otherwise `debt`",
+    ]
+
+
 def _render_report(result: dict[str, Any]) -> str:
     lines = [
         f"# Meridian Review Signals: {result['task_id']}",
@@ -323,13 +676,27 @@ def _render_report(result: dict[str, Any]) -> str:
         f"- workspace: `{result.get('workspace', '')}`",
         f"- executor: `{result.get('executor', '')}`",
         f"- status: `{result.get('status', '')}`",
+        f"- decision: `{result.get('decision', '')}`",
         f"- summary: {result.get('summary', '')}",
+        f"- normalized_summary: {result.get('normalized_summary', '')}",
     ]
     if result.get("trigger_event_id"):
         lines.append(f"- trigger_event_id: `{result['trigger_event_id']}`")
     if result.get("triggered_by"):
         lines.append(f"- triggered_by: `{result['triggered_by']}`")
-    lines.extend(["", "## Lanes", ""])
+    findings = result.get("findings") or []
+    if findings:
+        lines.extend(["", "## Normalized Findings", ""])
+        for finding in findings:
+            lines.append(f"### [{finding.get('bucket')}] {finding.get('summary')}")
+            lines.append("")
+            lines.append(f"- source: `{finding.get('source')}`")
+            if finding.get("evidence"):
+                lines.extend(["", "```text", finding["evidence"], "```"])
+            lines.append("")
+    lines.extend(["", "## Severity Policy", ""])
+    lines.extend(_policy_lines())
+    lines.extend(["", "## Raw Lanes", ""])
     for lane in result.get("lanes", []):
         lines.append(
             f"### {lane.get('name')} [{lane.get('status')}]"
@@ -354,20 +721,8 @@ def _write_report(result: dict[str, Any]) -> str:
 
 
 def _task_result_summary(result: dict[str, Any]) -> str:
-    lanes = result.get("lanes") or []
-    summary = _summarize_lanes(lanes)
-    parts: list[str] = []
-    if summary["failed"]:
-        parts.append(f"{summary['failed']} lane failed")
-    if summary["passed"]:
-        parts.append(f"{summary['passed']} passed")
-    if summary["skipped"]:
-        parts.append(f"{summary['skipped']} skipped")
-    if summary["security_failures"]:
-        parts.append(f"{summary['security_failures']} security")
-    if summary["quality_failures"]:
-        parts.append(f"{summary['quality_failures']} quality")
-    return ", ".join(parts) if parts else "no lanes executed"
+    findings = result.get("findings") or _normalize_findings(result.get("lanes") or [])
+    return _normalized_summary(findings)
 
 
 def latest_quality_result(task_id: str, *, state_path: Path = STATE_PATH) -> dict[str, Any] | None:
@@ -382,8 +737,8 @@ def quality_brief_for_task(task_id: str, *, state_path: Path = STATE_PATH) -> st
         return ""
     report_path = result.get("report_path") or "-"
     return (
-        f"Quality gate: `{result.get('status', 'unknown')}`"
-        f" | {result.get('summary', _task_result_summary(result))}"
+        f"Quality gate: `{result.get('decision', result.get('status', 'unknown'))}`"
+        f" | {result.get('normalized_summary', result.get('summary', _task_result_summary(result)))}"
         f" | report: `{report_path}`"
     )
 
@@ -431,6 +786,8 @@ def _scan_task(
 
     summary = _summarize_lanes(lanes)
     status = "passed" if summary["failed"] == 0 else "failed"
+    findings = _normalize_findings(lanes)
+    decision = _overall_decision(findings)
     result = {
         "task_id": task_id,
         "workspace": executor.workspace,
@@ -440,7 +797,10 @@ def _scan_task(
         "scanned_at": _isoformat(_utcnow()),
         "duration_seconds": round(time.monotonic() - started, 2),
         "status": status,
-        "summary": _task_result_summary({"lanes": lanes}),
+        "decision": decision,
+        "summary": _task_result_summary({"findings": findings}),
+        "normalized_summary": _normalized_summary(findings),
+        "findings": findings,
         "lanes": lanes,
     }
     result["report_path"] = _write_report(result)
@@ -457,6 +817,8 @@ def _emit_result_event(result: dict[str, Any]) -> None:
             "report_path": result.get("report_path"),
             "summary": result.get("summary"),
             "status": result.get("status"),
+            "decision": result.get("decision"),
+            "normalized_summary": result.get("normalized_summary"),
             "trigger_event_id": result.get("trigger_event_id"),
         },
     )
@@ -683,13 +1045,14 @@ def format_quality_status(task_id: str | None = None, *, state_path: Path = STAT
         lines = [
             f"Meridian quality gate `{task_id}`",
             f"  Status:   {result.get('status')}",
-            f"  Summary:  {result.get('summary')}",
+            f"  Decision: {result.get('decision')}",
+            f"  Summary:  {result.get('normalized_summary', result.get('summary'))}",
             f"  Scanned:  {result.get('scanned_at')}",
             f"  Report:   {result.get('report_path')}",
         ]
-        for lane in result.get("lanes", []):
+        for finding in result.get("findings", [])[:8]:
             lines.append(
-                f"  - {lane.get('name')}: {lane.get('status')} (exit={lane.get('exit_code')}, {lane.get('duration_seconds')}s)"
+                f"  - [{finding.get('bucket')}] {finding.get('summary')}"
             )
         return "\n".join(lines)
 
@@ -704,9 +1067,19 @@ def format_quality_status(task_id: str | None = None, *, state_path: Path = STAT
     )
     if not ordered:
         return "No quality-gate results recorded yet."
+    aggregate = {"blocking": 0, "review": 0, "debt": 0, "advisory": 0}
+    for item in ordered:
+        counts = _bucket_counts(item.get("findings") or [])
+        for bucket in aggregate:
+            if counts.get(bucket):
+                aggregate[bucket] += 1
+    aggregate_parts = [f"{bucket}={count}" for bucket, count in aggregate.items() if count]
     lines = ["Meridian quality gate", f"  Recorded tasks: {len(ordered)}"]
+    if aggregate_parts:
+        lines.append(f"  Aggregate: {' '.join(aggregate_parts)}")
     for item in ordered[:8]:
         lines.append(
-            f"  - {item.get('task_id')}: {item.get('status')} | {item.get('summary')} | {item.get('scanned_at')}"
+            f"  - {item.get('task_id')}: {item.get('decision')} | "
+            f"{item.get('normalized_summary', item.get('summary'))} | {item.get('scanned_at')}"
         )
     return "\n".join(lines)

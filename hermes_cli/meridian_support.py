@@ -594,9 +594,15 @@ def build_roles_status_text(workspace: str | Path | None = None) -> str:
             lines.append("**Recent Commits:**")
             lines.extend(f"- `{item}`" for item in recent_commits[:4])
         if quality_status and not quality_status.startswith("No quality-gate"):
+            quality_lines = [line.rstrip() for line in quality_status.splitlines()]
             lines.append("**Quality Gate:**")
-            for line in quality_status.splitlines()[1:5]:
-                lines.append(f"- {line.strip()}")
+            if len(quality_lines) > 1:
+                lines.append(f"- {quality_lines[1].strip()}")
+            if len(quality_lines) > 2:
+                lines.append(f"- {quality_lines[2].strip()}")
+            for line in quality_lines[3:6]:
+                if line.strip().startswith("- "):
+                    lines.append(line.strip())
         lines.append("")
 
     for role in ROLE_NAMES:
