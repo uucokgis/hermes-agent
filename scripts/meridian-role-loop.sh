@@ -379,6 +379,11 @@ should_run_pass_in_review_focus() {
     echo 1
     return
   fi
+  if [[ "$role" == "philip" ]]; then
+    # Keep backlog/support/orchestration moving during review-heavy windows.
+    echo 1
+    return
+  fi
   if [[ "$role" == "fatih" ]]; then
     local request_changes
     request_changes="$(review_request_changes_count)"
