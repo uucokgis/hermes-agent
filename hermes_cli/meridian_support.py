@@ -545,6 +545,12 @@ def _load_workspace_summary(workspace: str | Path | None = None) -> dict[str, An
 
 def build_roles_status_text(workspace: str | Path | None = None) -> str:
     lines = ["🧭 **Meridian Role Status**", ""]
+    try:
+        from hermes_cli.meridian_quality import format_quality_status
+
+        quality_status = format_quality_status()
+    except Exception:
+        quality_status = ""
     summary = _load_workspace_summary(workspace)
     if summary:
         queue_counts = summary.get("queue_counts") or {}
@@ -587,6 +593,10 @@ def build_roles_status_text(workspace: str | Path | None = None) -> str:
         if recent_commits:
             lines.append("**Recent Commits:**")
             lines.extend(f"- `{item}`" for item in recent_commits[:4])
+        if quality_status and not quality_status.startswith("No quality-gate"):
+            lines.append("**Quality Gate:**")
+            for line in quality_status.splitlines()[1:5]:
+                lines.append(f"- {line.strip()}")
         lines.append("")
 
     for role in ROLE_NAMES:

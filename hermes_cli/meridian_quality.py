@@ -1,10 +1,9 @@
 """Meridian review-signal quality gate orchestration.
 
 This module consumes Meridian workflow events and runs non-blocking quality and
-security checks when tasks enter ``review``. Results are persisted in
-``$HERMES_HOME/meridian/quality_gate_state.json`` and rendered as markdown
-reports under ``$HERMES_HOME/meridian/review_signals/`` so Matthew and Fatih
-can consume the same evidence.
+security checks when tasks enter ``review``. Results are persisted in a
+shared Meridian state directory so Matthew, Fatih, the default gateway profile,
+and CLI status commands all consume the same evidence.
 """
 
 from __future__ import annotations
@@ -19,14 +18,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from hermes_constants import get_hermes_home
 from hermes_utils import atomic_json_write
 
 from hermes_cli.meridian_runtime import EVENT_LOG_PATH, emit_meridian_event, parse_iso_datetime
 
 
-STATE_PATH = get_hermes_home() / "meridian" / "quality_gate_state.json"
-REPORTS_DIR = get_hermes_home() / "meridian" / "review_signals"
 DEFAULT_REMOTE_WORKSPACE = "/home/umut/meridian"
 DEFAULT_EVENT_TYPES = frozenset({"task_transitioned"})
 DEFAULT_REVIEW_QUEUE = "review"
@@ -78,6 +74,17 @@ class Executor:
     user: str | None = None
     key: str | None = None
     password: str | None = None
+
+
+def shared_meridian_dir() -> Path:
+    override = (os.getenv("HERMES_MERIDIAN_SHARED_DIR") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".hermes" / "meridian"
+
+
+STATE_PATH = shared_meridian_dir() / "quality_gate_state.json"
+REPORTS_DIR = shared_meridian_dir() / "review_signals"
 
 
 def _utcnow() -> datetime:
