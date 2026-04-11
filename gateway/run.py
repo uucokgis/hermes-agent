@@ -2056,6 +2056,9 @@ class GatewayRunner:
         if canonical == "meridian":
             return await self._handle_meridian_command(event)
 
+        if canonical == "meridian_status":
+            return await self._handle_meridian_status_command(event)
+
         if canonical == "meridian_watch":
             return await self._handle_meridian_watch_command(event)
 
@@ -3527,24 +3530,86 @@ class GatewayRunner:
         return "\n".join(lines)
 
     async def _handle_meridian_command(self, event: MessageEvent) -> str:
-        """Handle /meridian status, waiting, and ticket helpers."""
+        """Handle /meridian [subcommand] — menu, waiting, tickets, board, activity."""
         raw_args = event.get_command_args().strip()
         if not raw_args:
+            # Inline keyboard is sent by Telegram adapter; plain-text fallback here
             return self._meridian_menu_text(event.source)
-        if raw_args == "status":
-            from hermes_cli.meridian_support import build_roles_status_text
 
-            return build_roles_status_text()
+        parts = raw_args.split()
+        subcommand = parts[0].lower()
 
-        subcommand = raw_args.split()[0].lower()
+        if subcommand == "status":
+            # Redirect to the dedicated /meridian_status handler for LLM summary
+            return await self._handle_meridian_status_command(event)
         if subcommand == "waiting":
             return self._meridian_waiting_text()
         if subcommand == "tickets":
             return self._meridian_tickets_text(limit=8)
         if subcommand == "board":
             return self._meridian_board_text()
+        if subcommand in ("activity", "what"):
+            # /meridian activity [hours]  — what agents did in last N hours
+            hours = 6
+            for p in parts[1:]:
+                try:
+                    hours = int(p)
+                    break
+                except ValueError:
+                    pass
+            return self._meridian_activity_text(hours)
 
         return self._meridian_menu_text(event.source)
+
+    async def _handle_meridian_status_command(self, event: MessageEvent) -> str:
+        """Return a compact summary of current Meridian role status."""
+        from hermes_cli.meridian_support import role_loop_state, _load_workspace_summary
+
+        lines = ["📡 **Meridian Durum**", ""]
+
+        # Queue counts from workspace summary
+        try:
+            summary = _load_workspace_summary(None)
+            if summary:
+                qc = summary.get("queue_counts") or {}
+                lines.append(
+                    f"📋 `backlog={qc.get('backlog',0)}` "
+                    f"`ready={qc.get('ready',0)}` "
+                    f"`in_progress={qc.get('in_progress',0)}` "
+                    f"`review={qc.get('review',0)}` "
+                    f"`done={qc.get('done',0)}` "
+                    f"`debt={qc.get('debt',0)}`"
+                )
+                in_prog = summary.get("recent_in_progress_entries") or []
+                if in_prog:
+                    titles = []
+                    for item in in_prog[:3]:
+                        t = item.get("title") or item.get("filename") or str(item) if isinstance(item, dict) else str(item)
+                        titles.append(f"`{str(t)[:50]}`")
+                    lines.append("🔄 In progress: " + ", ".join(titles))
+                lines.append("")
+        except Exception:
+            pass
+
+        # Role loop status (compact)
+        role_emoji = {"philip": "🎯", "fatih": "🔧", "matthew": "🔍"}
+        for role in ("philip", "fatih", "matthew"):
+            try:
+                state = role_loop_state(role)
+                status_icon = "🟢" if state.get("running") else "🔴"
+                raw_summary = (state.get("summary") or "").strip()
+                # Take just the first meaningful line of the summary
+                summary_line = next(
+                    (l.strip() for l in raw_summary.splitlines()
+                     if l.strip() and not l.strip().startswith("=") and len(l.strip()) > 5),
+                    raw_summary[:100] if raw_summary else "—"
+                )
+                lines.append(f"{status_icon} {role_emoji.get(role, '•')} **{role.capitalize()}**: {summary_line[:120]}")
+            except Exception:
+                lines.append(f"❓ **{role.capitalize()}**: durum alınamadı")
+
+        lines.extend(["", "_Detay için:_ `/meridian_watch philip`"])
+        return "\n".join(lines)
 
     def _meridian_flow_state(self) -> dict[str, dict[str, Any]]:
         flows = getattr(self, "_pending_meridian_flows", None)
@@ -3630,51 +3695,174 @@ class GatewayRunner:
             parts.append("Task detayı için: `/meridian_task`")
         return "\n\n".join(parts)
 
+    def _meridian_ssh_run(self, remote_cmd: str, timeout: int = 15) -> str | None:
+        """Run a command on the remote Meridian workspace host via SSH key auth.
+        Returns stdout on success, None on failure."""
+        import os, subprocess
+
+        host = (os.getenv("TERMINAL_SSH_HOST") or "").strip()
+        user = (os.getenv("TERMINAL_SSH_USER") or "umut").strip()
+        key = os.path.expanduser(os.getenv("TERMINAL_SSH_KEY") or "~/.ssh/id_ed25519")
+        if not host:
+            return None
+        cmd = [
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=8",
+            "-o", "BatchMode=yes",
+        ]
+        if os.path.exists(key):
+            cmd += ["-i", key]
+        cmd += [f"{user}@{host}", remote_cmd]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            if result.returncode == 0:
+                return result.stdout
+        except Exception:
+            pass
+        return None
+
     def _meridian_board_text(self) -> str:
-        from hermes_cli.meridian_dispatcher import _resolve_workspace_path
-        from hermes_cli.meridian_workflow import list_task_refs
+        import json, os
 
-        workspace = _resolve_workspace_path(None)
-        queues = list_task_refs(workspace)
+        workspace = (os.getenv("HERMES_MERIDIAN_WORKSPACE") or "/home/umut/meridian").strip()
         queue_order = ("backlog", "ready", "in_progress", "review", "waiting_human", "done", "debt")
+        # Aliases: in_progress dir might be named "in-progress" on remote
+        aliases = {"in_progress": "in-progress"}
 
-        lines = ["📋 **Meridian Board**", "", f"Workspace: `{workspace}`"]
+        # Build a small shell script that lists files per queue
+        shell_parts = ["import json,os; from pathlib import Path"]
+        shell_parts.append(f"ws=Path({workspace!r}).expanduser()")
+        shell_parts.append(f"qs={list(queue_order)!r}")
+        shell_parts.append(f"al={aliases!r}")
+        shell_parts.append("r={}")
+        shell_parts.append(
+            "[(r.__setitem__(q,[p.name for p in sorted((ws/'tasks'/n).iterdir()) "
+            "if p.is_file() and not p.name.startswith('.')] if (ws/'tasks'/n).is_dir() else "
+            "([p.name for p in sorted((ws/'tasks'/al[q]).iterdir()) "
+            "if p.is_file() and not p.name.startswith('.')] if q in al and (ws/'tasks'/al[q]).is_dir() else []))) "
+            "for q in qs for n in [q]]"
+        )
+        shell_parts.append("print(json.dumps(r))")
+        py_script = "; ".join(shell_parts)
+
+        data: dict[str, list[str]] | None = None
+        raw = self._meridian_ssh_run(f"python3 -c {py_script!r}")
+        if raw:
+            try:
+                data = json.loads(raw.strip())
+            except Exception:
+                pass
+
+        if data is None:
+            # Fall back to local filesystem (may be empty if workspace is remote-only)
+            from hermes_cli.meridian_dispatcher import _resolve_workspace_path
+            from hermes_cli.meridian_workflow import list_task_refs
+            ws_path = _resolve_workspace_path(None)
+            refs = list_task_refs(ws_path)
+            data = {q: [t.filename for t in items] for q, items in refs.items()}
+
+        host_label = (os.getenv("TERMINAL_SSH_HOST") or "local")
+        lines = ["📋 **Meridian Board**", "", f"Workspace: `{workspace}` ({host_label})"]
         for queue in queue_order:
-            items = queues.get(queue, [])
+            items = data.get(queue, [])
             lines.extend(["", f"**{queue}** `{len(items)}`"])
             if not items:
                 lines.append("-")
                 continue
-            for task in items[:10]:
-                metadata = dict(task.metadata or {})
-                title = str(metadata.get("title") or task.task_id).strip()
-                branch = str(metadata.get("pr_branch") or metadata.get("branch") or "").strip()
-                commit_sha = str(metadata.get("commit_sha") or "").strip()
-                verification_status = str(metadata.get("verification_status") or "").strip()
-                pushed = metadata.get("pushed")
-                owner = str(metadata.get("claimed_by") or metadata.get("assigned_to") or "").strip()
-
-                parts = [f"- `{task.task_id}`"]
-                if title and title != task.task_id:
-                    parts.append(title)
-                details = []
-                if owner:
-                    details.append(f"owner={owner}")
-                if branch:
-                    details.append(f"branch={branch}")
-                if commit_sha:
-                    details.append(f"commit={commit_sha[:12]}")
-                if verification_status:
-                    details.append(f"verify={verification_status}")
-                if pushed is not None:
-                    details.append(f"pushed={str(pushed).lower()}")
-                if details:
-                    parts.append("[" + " | ".join(details) + "]")
-                lines.append(" ".join(parts))
+            for filename in items[:10]:
+                # Strip .md extension and use as task id
+                task_id = filename[:-3] if filename.endswith(".md") else filename
+                lines.append(f"- `{task_id}`")
             remaining = len(items) - 10
             if remaining > 0:
                 lines.append(f"- +{remaining} more")
         return "\n".join(lines)
+
+    def _meridian_activity_text(self, hours: int = 6) -> str:
+        """Summarize what Philip, Fatih, Matthew did in the last N hours via SSH."""
+        import os, re
+        from datetime import datetime, timezone, timedelta
+
+        agents = ("philip", "fatih", "matthew")
+        loop_log_dir = "~/.hermes/meridian/loops"
+        since_utc = datetime.now(timezone.utc) - timedelta(hours=hours)
+        since_hour = since_utc.hour
+        since_date = since_utc.strftime("%Y-%m-%d")
+
+        # Build a shell script to extract summaries since N hours ago
+        py_script = f"""
+import re, json, os
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+
+log_dir = Path({loop_log_dir!r}).expanduser()
+since = datetime.now(timezone.utc) - timedelta(hours={hours})
+agents = {list(agents)!r}
+result = {{}}
+
+for agent in agents:
+    logfile = log_dir / f"{{agent}}.loop.log"
+    if not logfile.exists():
+        result[agent] = []
+        continue
+    content = logfile.read_text(errors='replace')
+    pat = rf'(=== (\\d{{4}}-\\d{{2}}-\\d{{2}}T\\d{{2}}:\\d{{2}}:\\d{{2}})\\+00:00 \\[' + agent + r'\\][^\\n]*===)'
+    parts = re.split(pat, content)
+    sessions = []
+    i = 1
+    while i < len(parts):
+        header = parts[i]
+        ts_str = parts[i+1] if i+1 < len(parts) else ''
+        body = parts[i+2] if i+2 < len(parts) else ''
+        i += 3
+        try:
+            ts = datetime.fromisoformat(ts_str + '+00:00') if ts_str else None
+        except: ts = None
+        if ts and ts < since:
+            continue
+        lines = body.strip().split('\\n')
+        sid_idx = next((j for j,l in enumerate(lines) if 'session_id:' in l), None)
+        if sid_idx is None:
+            continue
+        summary_lines = [l.strip() for l in lines[max(0,sid_idx-6):sid_idx]
+                         if l.strip() and not l.strip().startswith('┊')
+                         and not l.strip().startswith('╭') and not l.strip().startswith('╰')
+                         and not l.strip().startswith('⚠') and len(l.strip()) > 15]
+        summary = ' | '.join(summary_lines[-2:])[:200] if summary_lines else ''
+        if ts_str:
+            tr_hour = int(ts_str[11:13]) + 3
+            time_label = f"{{ts_str[11:16]}} UTC (~{{tr_hour:02d}}:xx TR)"
+        else:
+            time_label = '?'
+        sessions.append({{'time': time_label, 'summary': summary}})
+    result[agent] = sessions
+
+print(json.dumps(result))
+"""
+        raw = self._meridian_ssh_run(f"python3 -c {py_script!r}", timeout=20)
+        data: dict = {}
+        if raw:
+            try:
+                data = __import__("json").loads(raw.strip())
+            except Exception:
+                pass
+
+        emoji = {"philip": "🎯", "fatih": "🔧", "matthew": "🔍"}
+        lines = [f"🕐 **Son {hours} saatte ne yapıldı?**", ""]
+        for agent in agents:
+            sessions = data.get(agent, [])
+            lines.append(f"{emoji.get(agent, '•')} **{agent.capitalize()}** — {len(sessions)} session")
+            if not sessions:
+                lines.append("  _(aktivite yok)_")
+            else:
+                for s in sessions[-5:]:
+                    summary = s.get("summary", "")
+                    time_label = s.get("time", "")
+                    if summary:
+                        lines.append(f"  `[{time_label}]` {summary[:150]}")
+            lines.append("")
+        return "\n".join(lines).strip()
 
     def _meridian_tickets_text(self, *, limit: int = 8) -> str:
         from hermes_cli.meridian_support import (

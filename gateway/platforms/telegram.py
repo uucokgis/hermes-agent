@@ -1380,6 +1380,11 @@ class TelegramAdapter(BasePlatformAdapter):
             return
         data = query.data
 
+        # --- Meridian menu callbacks (mer:action[:arg]) ---
+        if data.startswith("mer:"):
+            await self._handle_meridian_menu_callback(query, data)
+            return
+
         # --- Model picker callbacks ---
         if data.startswith(("mp:", "mm:", "mb", "mx", "mg:")):
             chat_id = str(query.message.chat_id) if query.message else None
@@ -1464,6 +1469,62 @@ class TelegramAdapter(BasePlatformAdapter):
                         answer, getattr(query.from_user, "id", "unknown"))
         except Exception as exc:
             logger.error("Failed to write update response from callback: %s", exc)
+
+    async def _handle_meridian_menu_callback(self, query: Any, data: str) -> None:
+        """Handle Meridian inline keyboard button callbacks (mer:action[:arg])."""
+        await query.answer()
+        parts = data.split(":", 2)
+        action = parts[1] if len(parts) > 1 else ""
+        arg = parts[2] if len(parts) > 2 else ""
+
+        chat_id = str(query.message.chat_id) if query.message else None
+        if not chat_id:
+            return
+
+        # Build a fake command event and dispatch through the gateway runner
+        # For actions that map to simple gateway subcommands
+        action_map = {
+            "board": "/meridian board",
+            "status": "/meridian_status",
+            "waiting": "/meridian waiting",
+            "tickets": "/meridian tickets",
+            "watch": "/meridian_watch",
+            "activity": f"/meridian activity {arg or '6'}",
+        }
+        cmd_text = action_map.get(action)
+        if not cmd_text:
+            return
+
+        # Send a synthetic command event through the normal gateway runner dispatch
+        try:
+            from gateway.session import SessionSource
+
+            thread_id = getattr(query.message, "message_thread_id", None) if query.message else None
+            source = SessionSource(
+                platform=self.platform,
+                chat_id=chat_id,
+                user_id=str(getattr(query.from_user, "id", "")) if query.from_user else "",
+                thread_id=str(thread_id) if thread_id else None,
+            )
+            event = MessageEvent(
+                text=cmd_text,
+                source=source,
+                message_type=MessageType.COMMAND,
+                message_id=None,
+            )
+            response = await self._message_handler(event)
+            if response:
+                await self._send_with_retry(
+                    chat_id=chat_id,
+                    content=response,
+                    metadata={"thread_id": thread_id} if thread_id else None,
+                )
+        except Exception as exc:
+            logger.error("Meridian menu callback failed for action=%s: %s", action, exc)
+            try:
+                await self._bot.send_message(chat_id=chat_id, text=f"❌ Hata: {exc}")
+            except Exception:
+                pass
 
     async def send_voice(
         self,
@@ -2087,9 +2148,48 @@ class TelegramAdapter(BasePlatformAdapter):
             return
         if not self._should_process_message(update.message, is_command=True):
             return
-        
+
+        # /meridian with no args → send inline keyboard menu directly
+        text = update.message.text.strip()
+        bare_cmd = text.split()[0].lstrip("/").split("@")[0].lower()
+        if bare_cmd == "meridian" and len(text.split()) == 1:
+            await self._send_meridian_keyboard_menu(update.message)
+            return
+
         event = self._build_message_event(update.message, MessageType.COMMAND)
         await self.handle_message(event)
+
+    async def _send_meridian_keyboard_menu(self, message: "Message") -> None:
+        """Send the Meridian menu as an inline keyboard."""
+        from hermes_cli.meridian_notifier import collect_snapshot, waiting_human_tasks
+        try:
+            waiting_count = len(waiting_human_tasks(collect_snapshot()))
+        except Exception:
+            waiting_count = 0
+
+        waiting_label = f"⏳ Waiting ({waiting_count})" if waiting_count else "⏳ Waiting"
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📋 Board", callback_data="mer:board"),
+                InlineKeyboardButton("📡 Status", callback_data="mer:status"),
+            ],
+            [
+                InlineKeyboardButton(waiting_label, callback_data="mer:waiting"),
+                InlineKeyboardButton("🎫 Tickets", callback_data="mer:tickets"),
+            ],
+            [
+                InlineKeyboardButton("🕐 Activity (6h)", callback_data="mer:activity:6"),
+                InlineKeyboardButton("👁 Watch", callback_data="mer:watch"),
+            ],
+        ])
+        try:
+            await message.reply_text(
+                "🧭 *Meridian Menu*",
+                parse_mode="Markdown",
+                reply_markup=keyboard,
+            )
+        except Exception as e:
+            logger.warning("Failed to send Meridian keyboard menu: %s", e)
     
     async def _handle_location_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming location/venue pin messages."""
