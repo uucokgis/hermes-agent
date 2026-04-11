@@ -16,7 +16,7 @@ REVIEW_PRIORITY_MATTHEW_SLEEP="${HERMES_MERIDIAN_REVIEW_PRIORITY_MATTHEW_SLEEP:-
 REVIEW_PRIORITY_FATIH_SLEEP="${HERMES_MERIDIAN_REVIEW_PRIORITY_FATIH_SLEEP:-900}"
 REVIEW_PRIORITY_PHILIP_SLEEP="${HERMES_MERIDIAN_REVIEW_PRIORITY_PHILIP_SLEEP:-1800}"
 REVIEW_PRIORITY_MATTHEW_MAX_TURNS="${HERMES_MERIDIAN_REVIEW_PRIORITY_MATTHEW_MAX_TURNS:-20}"
-REVIEW_PRIORITY_FATIH_MAX_TURNS="${HERMES_MERIDIAN_REVIEW_PRIORITY_FATIH_MAX_TURNS:-8}"
+REVIEW_PRIORITY_FATIH_MAX_TURNS="${HERMES_MERIDIAN_REVIEW_PRIORITY_FATIH_MAX_TURNS:-16}"
 REVIEW_PRIORITY_PHILIP_MAX_TURNS="${HERMES_MERIDIAN_REVIEW_PRIORITY_PHILIP_MAX_TURNS:-4}"
 
 if [[ -z "$ROLE" ]]; then
@@ -394,6 +394,21 @@ review_request_changes_count() {
   remote_exec "grep -RIl '^review_outcome: request_changes' tasks/review/decisions 2>/dev/null | wc -l" 2>/dev/null | tr -dc '0-9'
 }
 
+fatih_has_work() {
+  local ready_count request_changes
+  ready_count="$(remote_exec "find tasks/ready/ -maxdepth 1 -name '*.md' 2>/dev/null | wc -l" 2>/dev/null | tr -dc '0-9')"
+  request_changes="$(review_request_changes_count)"
+  ready_count="${ready_count:-0}"
+  request_changes="${request_changes:-0}"
+  if [[ "$ready_count" =~ ^[0-9]+$ ]] && (( ready_count > 0 )); then
+    echo 1; return
+  fi
+  if [[ "$request_changes" =~ ^[0-9]+$ ]] && (( request_changes > 0 )); then
+    echo 1; return
+  fi
+  echo 0
+}
+
 review_focus_mode() {
   local active_count request_changes
   active_count="$(review_active_count)"
@@ -485,6 +500,17 @@ fi
 while true; do
   IN_REVIEW_FOCUS_MODE="$(review_focus_mode)"
   CURRENT_SLEEP_SECONDS="$(role_sleep_seconds_for_current_mode "$ROLE" "$IN_REVIEW_FOCUS_MODE")"
+
+  # Fatih pre-check: LLM açmadan önce gerçek iş var mı diye bak
+  if [[ "$ROLE" == "fatih" && "$IN_REVIEW_FOCUS_MODE" != "1" ]]; then
+    if [[ "$(fatih_has_work)" != "1" ]]; then
+      echo "=== $(date -Is) [$ROLE] profile=$PROFILE workspace=$WORKSPACE ==="
+      echo "[fatih] No ready tasks or request-changes — skipping LLM pass"
+      sleep "$CURRENT_SLEEP_SECONDS"
+      continue
+    fi
+  fi
+
   echo "=== $(date -Is) [$ROLE] profile=$PROFILE workspace=$WORKSPACE ==="
   if [[ "$IN_REVIEW_FOCUS_MODE" == "1" ]]; then
     echo "[$ROLE] review focus mode active"
