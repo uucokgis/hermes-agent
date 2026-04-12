@@ -26,20 +26,21 @@ def should_auto_route_meridian_message(user_message: str, *, delegate_depth: int
         "yap", "yapal", "hallet", "bak", "feature", "bug", "task", "review", "fix",
         "implement", "incele", "geliştir", "gelistir", "refactor",
     )
-    persona_markers = ("philip", "fatih", "matthew")
+    workflow_markers = ("philip", "fatih", "matthew")
+    meridian_only_markers = ("branch", "checkout", "commit", "merge")
     queue_markers = ("backlog", "ready", "in_progress", "review", "done", "debt")
 
     if "meridian" in text:
-        return any(marker in text for marker in (*work_markers, *persona_markers))
+        return any(marker in text for marker in (*work_markers, *workflow_markers, *meridian_only_markers))
 
     # Users often refer to the Meridian workflow by persona or queue name
     # without saying "Meridian" explicitly. Require a stronger combination of
     # workflow-specific language so ordinary "ready/review" phrasing does not
     # accidentally trigger the overlay.
-    mentions_persona = any(marker in text for marker in persona_markers)
+    mentions_workflow = any(marker in text for marker in workflow_markers)
     mentions_queue = any(marker in text for marker in queue_markers)
     mentions_work = any(marker in text for marker in work_markers)
-    return (mentions_persona and (mentions_queue or mentions_work)) or (
+    return (mentions_workflow and (mentions_queue or mentions_work)) or (
         "backlog" in text and mentions_work
     )
 
@@ -62,15 +63,17 @@ def build_meridian_workflow_overlay(
     loaded_skill, skill_dir, _skill_name = loaded
     activation_note = (
         "[SYSTEM: The user is asking Hermes to handle Meridian work directly. "
-        "Follow the Meridian workflow skill below. Route new work through Philip "
-        "first, use sequential handoff to Fatih and Matthew when task state makes "
-        "it appropriate, use official Meridian workflow tools for claims and transitions, "
-        "and avoid polling or cron for immediate work.]"
+        "Follow the Meridian workflow skill below. Use one agent end-to-end: "
+        "shape the task if needed, create or switch to a task branch, implement "
+        "the change, commit it, run a fresh reviewer-minded self-review in the "
+        "Matthew lens, then push and merge only when the review passes. Keep "
+        "using task_claim/task_transition as the canonical workflow contract.]"
     )
     runtime_note = (
-        "This is a direct Meridian workflow request. Treat it as event-driven: "
-        "wake the next persona only when task state requires it, and prefer "
-        "task_claim/task_transition over raw queue file moves."
+        "This is a direct Meridian workflow request. Treat Philip, Fatih, and "
+        "Matthew as working lenses inside one agent, not concurrent runtimes. "
+        "Prefer deterministic task metadata, task branches, explicit review "
+        "notes, and task_claim/task_transition over persona handoff or polling loops."
     )
     return _build_skill_message(
         loaded_skill,

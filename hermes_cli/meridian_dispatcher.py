@@ -1258,11 +1258,12 @@ def meridian_command(args) -> int:
             ssh_host, remote_cwd = _terminal_remote_hint()
             if ssh_host:
                 print(
-                    "Hint: in the 106/107 split topology, use the long-running single Meridian runtime instead of `hermes meridian go`."
+                    "Hint: in the 106/107 split topology, use the single-agent Meridian workflow instead of `hermes meridian go`."
                 )
                 print(
-                    "Run `scripts/meridian-single-agent.sh start` on the Hermes machine, "
-                    f"with HERMES_MERIDIAN_WORKSPACE pointing to {remote_cwd or '/home/umut/meridian'}."
+                    "Open a focused Meridian session on the Hermes machine and work directly "
+                    f"against {remote_cwd or '/home/umut/meridian'}: shape the task, create a branch, "
+                    "implement, commit, review with fresh eyes, then push and merge."
                 )
             return 1
 

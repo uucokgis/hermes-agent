@@ -862,8 +862,8 @@ def test_meridian_command_go_prints_remote_hint_when_workspace_is_not_local(monk
 
     out = capsys.readouterr().out
     assert rc == 1
-    assert "use the long-running single Meridian runtime" in out
-    assert "scripts/meridian-single-agent.sh start" in out
+    assert "use the single-agent Meridian workflow" in out
+    assert "shape the task, create a branch, implement, commit, review with fresh eyes, then push and merge" in out
 
 
 def test_meridian_command_history_prints_workflow_history(tmp_path, monkeypatch, capsys):

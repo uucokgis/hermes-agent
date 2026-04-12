@@ -2,15 +2,16 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 echo "scripts/meridian-go.sh is deprecated."
-echo "Using the single Meridian runtime entrypoint instead."
+echo "Use the single-agent Meridian workflow instead."
 echo
 
-if [[ "${1:-}" == "run-pass" ]]; then
-  shift
-  exec bash "$SCRIPT_DIR/meridian-single-agent.sh" run-pass "${1:-implement}"
-fi
-
-exec bash "$SCRIPT_DIR/meridian-single-agent.sh" status
+cat <<'EOF'
+Recommended flow:
+1. Open the Meridian task or request.
+2. Shape it if needed.
+3. Create a task branch.
+4. Implement and commit.
+5. Review again with Matthew-style reviewer eyes.
+6. Push and merge when the review passes.
+EOF

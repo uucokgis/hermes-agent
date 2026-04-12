@@ -1,23 +1,23 @@
 # Agentic Workflow MVP
 
-This document defines the file-based, LLM-first task system for the Meridian single-runtime workflow.
+This document defines the file-based, LLM-first task system for the Meridian single-agent workflow.
 
-## Role Modes
+## Working Lenses
 
-### Philip Mode
+### Philip Lens
 - Role: product manager and scrum/task manager
 - Owns: backlog quality, feature discovery, task prioritization, acceptance criteria, product documentation updates
 - Can ask Umut questions over Telegram when a product or prioritization decision is needed
 - Creates or refines execution packets for features, bugs, investigations, documentation gaps, CI/CD work, and technical debt
 - Does not write production code in the normal workflow
 
-### Fatih Mode
+### Fatih Lens
 - Role: implementation developer
 - Owns: code changes, tests, PR preparation, implementation notes
 - Pulls only tasks that are ready and well-scoped
-- Sends completed work to a separate Matthew review session by default
+- Creates a task branch, commits the work, and sends it to a fresh Matthew review pass by default
 
-### Matthew Review Mode
+### Matthew Review Lens
 - Role: reviewer, architect, and security triage
 - Owns: code review, architecture review, regression risk detection, scanner triage, technical debt creation
 - Reviews Fatih's work before merge
@@ -51,7 +51,7 @@ customer_support/
 ```
 
 This mailbox is for Meridian-related inbound Telegram or async user requests.
-It is not part of the delivery queue state machine; Philip mode owns it as a support and triage inbox.
+It is not part of the delivery queue state machine; the Philip lens owns it as a support and triage inbox.
 
 ## Directory Layout
 
@@ -71,28 +71,28 @@ tasks/
 
 ## Runtime Model
 
-There is one always-on Meridian runtime for the project workspace.
+There is one Meridian execution flow for the project workspace.
 
-- The runtime works directly in the live Meridian checkout on `107`.
-- Its default pass is implementation-first Fatih mode.
-- Review is a separate Hermes chat invocation that runs Matthew mode against `tasks/review/`.
-- Planning and intake are on-demand Philip-mode passes triggered by `tasks/waiting_human/` or `customer_support/inbox/`.
-- We no longer run three separate polling daemons.
+- The agent works directly in the live Meridian checkout on `107`.
+- Its default working posture is the implementation-first Fatih lens.
+- Review is a fresh Matthew pass against the task branch and `tasks/review/`.
+- Planning and intake are on-demand Philip passes triggered by `tasks/waiting_human/` or `customer_support/inbox/`.
+- We no longer run three separate polling daemons or role profiles.
 
-This keeps the single available model slot busy with one meaningful pass at a time instead of three competing loops.
+This keeps the single available model slot focused on one meaningful task at a time.
 
 ## Task Lifecycle
 
 Default flow:
 
 1. A Jira item or support request needs execution.
-2. Philip mode creates or refines the execution packet in `tasks/backlog/` or `tasks/ready/`.
-3. Fatih mode moves the task to `tasks/in_progress/` when implementation starts.
-4. Fatih mode updates implementation notes and moves it to `tasks/review/`.
-5. A separate Matthew review session runs.
+2. The Philip lens creates or refines the execution packet in `tasks/backlog/` or `tasks/ready/`.
+3. The Fatih lens moves the task to `tasks/in_progress/`, creates a task branch, and implements the change.
+4. The Fatih lens updates implementation notes, records branch and commit metadata, and moves the task to `tasks/review/`.
+5. A fresh Matthew review pass runs.
 6. Matthew either:
 - returns it to `tasks/in_progress/` with review notes
-- moves it to `tasks/done/`
+- approves push and merge, then moves it to `tasks/done/`
 - creates linked debt or follow-up tasks if needed
 
 Debt flow:
@@ -164,26 +164,26 @@ Meridian-related inbound Telegram requests that do not need an immediate synchro
 
 Default rule: Fatih does not self-approve.
 
-Matthew should review before merge unless there is an explicit emergency override. Even then, Matthew should review after the fact and create debt or follow-up tasks if needed.
+Matthew should review before push or merge unless there is an explicit emergency override. Even then, Matthew should review after the fact and create debt or follow-up tasks if needed.
 
 ## Availability Model
 
-Meridian is event-driven inside one runtime, not three independent polling daemons.
+Meridian is event-driven inside one workflow, not three independent polling daemons.
 
 - Review has the highest priority while `tasks/review/` is non-empty.
 - Implementation wakes when `tasks/ready/` has actionable work.
 - Planning wakes only for `tasks/waiting_human/` or `customer_support/inbox/` work.
-- If no meaningful event exists, the runtime logs a short no-op and sleeps.
+- If no meaningful event exists, the workflow stops cleanly instead of keeping a polling daemon alive.
 
 ## Shared Repo Safety
 
-If all role modes point at one live project checkout, parallel code edits are risky.
+If all working lenses point at one live project checkout, parallel code edits are risky.
 
 Current safe posture:
-- Philip mode: planning, support, backlog coordination, and queue artifacts
-- Matthew mode: review output, debt, investigation, and queue artifacts
-- Fatih mode: the primary code-writing mode
+- Philip lens: planning, support, backlog coordination, and queue artifacts
+- Matthew lens: review output, debt, investigation, and queue artifacts
+- Fatih lens: the primary code-writing mode
 
 Long-term safer posture:
 - shared control plane for `tasks/` and `customer_support/`
-- isolated code worktrees or branches for code-writing personas
+- isolated code worktrees or branches for code-writing tasks

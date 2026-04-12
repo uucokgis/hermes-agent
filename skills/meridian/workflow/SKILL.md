@@ -1,7 +1,7 @@
 ---
 name: meridian-workflow
-description: Use when a user asks Hermes directly to handle Meridian work. Route requests through the single Meridian runtime using Philip/Fatih/Matthew role modes and task-state handoff, not polling.
-version: 1.1.0
+description: Use when a user asks Hermes directly to handle Meridian work. One agent should take the task from shaping through branch, implementation, commit, review, push, and merge.
+version: 1.2.0
 author: Hermes Agent
 metadata:
   hermes:
@@ -18,94 +18,109 @@ Use this when the user talks to Hermes directly about Meridian work, for example
 
 ## Goal
 
-Coordinate Meridian work through one runtime with three role modes:
-1. Philip mode handles intake and shaping only when needed.
-2. Fatih mode implements only when a task is ready.
-3. Matthew mode reviews in a separate session and decides whether to approve, request changes, or escalate.
-4. Meridian-related inbound support requests are durably captured in `customer_support/` so Philip can answer asynchronously.
+Run Meridian work end-to-end inside one agent session:
+1. Shape the task with Philip-style product clarity when needed.
+2. Implement with Fatih-style execution discipline.
+3. Re-read the diff with Matthew-style reviewer eyes before push or merge.
+4. Keep support and waiting-human inputs durable in `customer_support/` or `tasks/` when async follow-up is needed.
 
-This is event-driven, not polling-driven.
+This is linear and deterministic, not polling-driven.
 
 ## Core Rules
 
-- New user work enters through Philip mode by default.
-- Treat Philip as the default human-facing Meridian persona.
+- New user work enters the single agent first; use the Philip lens only to clarify scope and acceptance criteria.
 - If a Meridian-related request comes from Telegram or another async inbox and does not require an immediate synchronous answer, record it into `customer_support/` first so Philip can process it later.
-- Use sequential handoff as the default. Parallel work is allowed only when file ownership and subsystem boundaries are clearly disjoint.
-- Only wake the next mode when the task state requires it.
+- Work one task at a time in one branch unless the user explicitly asks for a broader release train.
 - Prefer the existing Meridian task system over ad-hoc status tracking.
 - Treat `customer_support/` as a durable inbox outside the delivery queues.
 - Use official Meridian workflow primitives for queue changes when available.
+- Create or switch to a task branch before production edits when repo policy allows it.
+- Make at least one task-scoped commit before review.
+- Run a fresh self-review pass after implementation and before push/merge.
 - If no meaningful next action exists, stop and report status instead of looping.
-- Do not assume separate always-on Philip or Matthew daemons exist.
+- Do not assume separate always-on Philip, Fatih, or Matthew daemons exist.
 
-## Persona Loading
+## Working Lenses
 
-Before asking for a persona-specific pass, load that persona's skill:
+When you need a stronger posture for a phase, load the matching skill:
 - `skill_view(name="meridian-philip")`
 - `skill_view(name="meridian-fatih")`
 - `skill_view(name="meridian-matthew")`
 
-## Event-Driven Handoff Policy
+These are lenses for the same agent session, not separate workers.
+
+## Execution Policy
 
 ### Intake
 
 When the user gives a new Meridian request:
-- route it to Philip mode first
+- clarify product intent, constraints, and acceptance criteria first
 - if it is an async support/request-for-update style message, create or update a `customer_support/` ticket first
-- Philip should create or refine the task
-- Philip may promote a task to `ready/` only when it is decision-complete
+- create or refine the task packet
+- move it to `ready/` only when it is decision-complete
 
 ### Implementation
 
-Wake Fatih mode only when:
+Switch into the Fatih lens only when:
 - a task exists in `tasks/ready/`, and
 - there is no more urgent unfinished review loop to resolve
 
-Fatih should claim work explicitly before `ready -> in_progress`.
-Fatih should create meaningful task-related commits before handing work to review.
-Fatih should usually be the only persona writing production code in a shared checkout.
+Before coding:
+- claim the task explicitly before `ready -> in_progress`
+- create or switch to a task branch
+
+During coding:
+- keep changes narrow and production-safe
+- commit meaningful, task-related checkpoints
+- capture verification notes in the task
 
 ### Review
 
-Wake Matthew mode when:
+Switch into the Matthew lens when:
 - a task reaches `tasks/review/`, or
 - the user explicitly asks for architectural/security review
 
-If Matthew requests changes:
-- route the work back to Fatih mode
-- do not start unrelated new implementation
+During review:
+- re-read the task, branch, diff, and verification evidence from a fresh reviewer posture
+- decide whether the work is ready, needs changes, or requires human input
+- fix only tiny review-contained issues when that is clearly safer than bouncing the task back
 
-If Matthew approves:
+If the Matthew pass requests changes:
+- stay on the same task branch
+- apply the fixes
+- commit again
+- re-run the review lens before push or merge
+
+If the Matthew pass approves:
+- push the task branch
+- merge with `main` using the repo's normal policy
 - move the task to `done/` unless the workflow explicitly requires `waiting_human`
-
-Matthew should review the recorded branch or commit first when those fields exist, keeping the review scope narrow and deterministic.
-Small review-contained fixes are the exception, not the default.
 
 ## Priority Of Work
 
-When deciding which mode to wake next, prefer:
-1. active review work
+When deciding the next step, prefer:
+1. finishing the active review loop on the current task
 2. ready tasks
 3. waiting-human or inbox work
 4. new intake from the current user request
 
 ## Repo Safety
 
-- If all modes point at one live project checkout, parallel code editing is unsafe.
-- In that configuration, only Fatih should write production code.
-- Philip and Matthew stay read-heavy and mostly edit planning, task, debt, and support artifacts.
+- If all work points at one live project checkout, parallel code editing is unsafe.
+- Prefer one active implementation branch at a time.
+- Treat Philip and Matthew as read-heavy review/planning mindsets unless a tiny review-contained fix is clearly lower risk.
 
 ## Efficiency Rules
 
 - No competing polling loops for immediate work.
 - No recursive orchestration.
 - No "check every hour" behavior unless the user is explicitly configuring patrols.
-- Keep delegation linear and minimal to reduce compute overhead.
+- Keep the workflow linear: intake -> branch -> implement -> commit -> review -> push -> merge.
 
 ## Desired Outcome
 
-For a direct Meridian request, Hermes should behave like a lightweight coordinator:
+For a direct Meridian request, Hermes should behave like a disciplined senior engineer:
 - organize the work
-- wake the next mode only when needed
+- execute it in one focused branch
+- review it with fresh eyes before it leaves the machine
 - stop cleanly when the next state is "waiting"
