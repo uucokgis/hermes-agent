@@ -116,9 +116,21 @@ ensure_workspace_access() {
   exit 1
 }
 
-queue_count() {
+task_queue_count() {
   local queue="$1"
-  remote_exec "find tasks/$queue -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l" 2>/dev/null | tr -dc '0-9'
+  local status_pattern=""
+  case "$queue" in
+    review) status_pattern='^(status:[[:space:]]*(review|ready_for_review|READY_FOR_REVIEW))$' ;;
+    ready) status_pattern='^(status:[[:space:]]*ready)$' ;;
+    waiting_human) status_pattern='^(status:[[:space:]]*waiting_human)$' ;;
+  esac
+
+  if [[ -n "$status_pattern" ]]; then
+    remote_exec "find tasks/$queue -maxdepth 1 -type f -name '*.md' ! -name 'README.md' -exec sh -c 'for f do IFS= read -r first <\"\$f\" || true; [ \"\$first\" = \"---\" ] || continue; if grep -Eq \"$status_pattern\" \"\$f\"; then echo \"\$f\"; fi; done' sh {} + 2>/dev/null | wc -l" 2>/dev/null | tr -dc '0-9'
+    return
+  fi
+
+  remote_exec "find tasks/$queue -maxdepth 1 -type f -name '*.md' ! -name 'README.md' -exec sh -c 'for f do IFS= read -r first <\"\$f\" || true; [ \"\$first\" = \"---\" ] && echo \"\$f\"; done' sh {} + 2>/dev/null | wc -l" 2>/dev/null | tr -dc '0-9'
 }
 
 customer_support_count() {
@@ -127,9 +139,9 @@ customer_support_count() {
 
 pick_mode() {
   local review_count ready_count waiting_count inbox_count
-  review_count="$(queue_count review)"
-  ready_count="$(queue_count ready)"
-  waiting_count="$(queue_count waiting_human)"
+  review_count="$(task_queue_count review)"
+  ready_count="$(task_queue_count ready)"
+  waiting_count="$(task_queue_count waiting_human)"
   inbox_count="$(customer_support_count)"
 
   if [[ "$review_count" =~ ^[0-9]+$ ]] && (( review_count > 0 )); then
@@ -218,6 +230,8 @@ Runtime shape:
 Review mode rules:
 - behave as Matthew
 - start with tasks/review and keep scope narrow
+- treat only files in tasks/review whose frontmatter status is review or ready_for_review as actionable review items
+- ignore legacy summaries, status reports, patrol notes, approvals, and historical artifacts left in tasks/review
 - your default job is review-only: approve, request changes, create debt, or move to waiting_human
 - do not quietly implement the fix yourself just because you can
 - only use a tiny review-contained fix exception when it is obviously lower risk than a bounce-back
@@ -318,7 +332,7 @@ status_runtime() {
   fi
 
   echo "meridian | profile=$PROFILE | $status | workspace=$WORKSPACE | log=$LOG_FILE"
-  echo "queues: review=$(queue_count review) ready=$(queue_count ready) waiting_human=$(queue_count waiting_human) inbox=$(customer_support_count)"
+  echo "queues: review=$(task_queue_count review) ready=$(task_queue_count ready) waiting_human=$(task_queue_count waiting_human) inbox=$(customer_support_count)"
 }
 
 start_runtime() {
