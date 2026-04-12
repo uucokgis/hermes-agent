@@ -1258,10 +1258,10 @@ def meridian_command(args) -> int:
             ssh_host, remote_cwd = _terminal_remote_hint()
             if ssh_host:
                 print(
-                    "Hint: in the 106/107 split topology, use the long-running role loops instead of `hermes meridian go`."
+                    "Hint: in the 106/107 split topology, use the long-running single Meridian runtime instead of `hermes meridian go`."
                 )
                 print(
-                    "Run `scripts/meridian-multi-agent.sh start` on the Hermes machine, "
+                    "Run `scripts/meridian-single-agent.sh start` on the Hermes machine, "
                     f"with HERMES_MERIDIAN_WORKSPACE pointing to {remote_cwd or '/home/umut/meridian'}."
                 )
             return 1

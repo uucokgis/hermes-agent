@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Restart Hermes gateway + Meridian multi-agent loops + Board dashboard
+# Restart Hermes gateway + Meridian single runtime + Board dashboard
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,8 +13,8 @@ sudo systemctl reset-failed hermes-gateway.service 2>/dev/null || true
 echo "[2/4] Restarting hermes-gateway service..."
 sudo systemctl restart hermes-gateway.service
 
-echo "[3/4] Restarting Meridian agent loops (philip, fatih, matthew)..."
-bash "$SCRIPT_DIR/meridian-multi-agent.sh" restart
+echo "[3/4] Restarting Meridian single runtime..."
+bash "$SCRIPT_DIR/meridian-single-agent.sh" restart
 
 echo "[4/4] Restarting Meridian board dashboard on $BOARD_HOST..."
 ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
@@ -27,4 +27,4 @@ echo ""
 echo "=== Status ==="
 systemctl status hermes-gateway.service --no-pager | head -5
 echo "---"
-bash "$SCRIPT_DIR/meridian-multi-agent.sh" status
+bash "$SCRIPT_DIR/meridian-single-agent.sh" status

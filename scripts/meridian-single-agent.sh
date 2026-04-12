@@ -39,6 +39,19 @@ load_optional_env_file() {
 
 load_optional_env_file "$HOME/.hermes/.env"
 
+expand_path() {
+  local raw="$1"
+  if [[ "$raw" == "~" ]]; then
+    printf '%s\n' "$HOME"
+    return
+  fi
+  if [[ "$raw" == "~/"* ]]; then
+    printf '%s/%s\n' "$HOME" "${raw#~/}"
+    return
+  fi
+  printf '%s\n' "$raw"
+}
+
 role_local_clock() {
   TZ="$TIMEZONE_NAME" date '+%Y-%m-%d %H:%M:%S %Z'
 }
@@ -58,24 +71,58 @@ render_skill_body() {
   ' "$skill_path"
 }
 
-ensure_workspace() {
-  if [[ ! -d "$WORKSPACE" ]]; then
-    echo "Meridian workspace does not exist on this machine: $WORKSPACE" >&2
-    exit 1
+remote_exec() {
+  if [[ -d "$WORKSPACE/tasks" ]]; then
+    bash -lc "cd \"$WORKSPACE\" && $*"
+    return $?
   fi
-  if [[ ! -d "$WORKSPACE/tasks" ]]; then
-    echo "Meridian workspace is missing tasks/: $WORKSPACE" >&2
-    exit 1
+
+  local host="${HERMES_MERIDIAN_QUALITY_SSH_HOST:-${TERMINAL_SSH_HOST:-}}"
+  local user="${HERMES_MERIDIAN_QUALITY_SSH_USER:-${TERMINAL_SSH_USER:-}}"
+  local key="${HERMES_MERIDIAN_QUALITY_SSH_KEY:-${TERMINAL_SSH_KEY:-}}"
+  local password="${HERMES_MERIDIAN_QUALITY_SSH_PASSWORD:-${TERMINAL_SSH_PASSWORD:-}}"
+
+  if [[ -n "$key" ]]; then
+    key="$(expand_path "$key")"
   fi
+
+  if [[ -z "$host" || -z "$user" ]]; then
+    echo "remote workspace requires TERMINAL_SSH_HOST/USER or HERMES_MERIDIAN_QUALITY_SSH_HOST/USER" >&2
+    return 1
+  fi
+
+  local ssh_cmd=(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=8)
+  if [[ -n "$password" ]]; then
+    sshpass -p "$password" "${ssh_cmd[@]}" \
+      -o PreferredAuthentications=password \
+      -o PubkeyAuthentication=no \
+      "$user@$host" "cd '$WORKSPACE' && $*"
+    return $?
+  fi
+  if [[ -n "$key" ]]; then
+    ssh_cmd+=(-i "$key")
+  fi
+  "${ssh_cmd[@]}" "$user@$host" "cd '$WORKSPACE' && $*"
+}
+
+ensure_workspace_access() {
+  if [[ -d "$WORKSPACE/tasks" ]]; then
+    return
+  fi
+  if remote_exec "test -d tasks"; then
+    return
+  fi
+  echo "Meridian workspace is not accessible: $WORKSPACE" >&2
+  exit 1
 }
 
 queue_count() {
   local queue="$1"
-  find "$WORKSPACE/tasks/$queue" -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' '
+  remote_exec "find tasks/$queue -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l" 2>/dev/null | tr -dc '0-9'
 }
 
 customer_support_count() {
-  find "$WORKSPACE/customer_support/inbox" -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' '
+  remote_exec "find customer_support/inbox -maxdepth 1 -type f -name '*.md' 2>/dev/null | wc -l" 2>/dev/null | tr -dc '0-9'
 }
 
 pick_mode() {
@@ -276,7 +323,7 @@ status_runtime() {
 
 start_runtime() {
   local pid=""
-  ensure_workspace
+  ensure_workspace_access
   ensure_profile
 
   if [[ -f "$PID_FILE" ]]; then
@@ -327,7 +374,7 @@ stop_runtime() {
 }
 
 run_loop() {
-  ensure_workspace
+  ensure_workspace_access
   ensure_profile
 
   if [[ "$STARTUP_JITTER_SECONDS" =~ ^[0-9]+$ ]] && (( STARTUP_JITTER_SECONDS > 0 )); then
@@ -353,7 +400,7 @@ run_loop() {
 
 run_pass_action() {
   local mode="$1"
-  ensure_workspace
+  ensure_workspace_access
   ensure_profile
   run_chat_pass "$mode"
 }
