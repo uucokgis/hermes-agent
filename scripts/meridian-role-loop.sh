@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+#
+# DEPRECATED: Multi-role daemon loop (philip/fatih/matthew).
+#
+# The single-agent Meridian workflow is preferred. Each task should be handled
+# by one agent session that runs planning, implementation, and review in sequence.
+# See: docs/meridian/single-agent-runbook.md
+#
+# This script is kept for backward compatibility only. It maps the old role names
+# (philip, fatih, matthew) to the new phase names (planner, developer, reviewer)
+# in its output.
 
 set -euo pipefail
 
@@ -12,17 +22,25 @@ PASS_TIMEOUT_SECONDS="${HERMES_MERIDIAN_PASS_TIMEOUT_SECONDS:-900}"
 MODEL_LOCK_FILE="${HERMES_MERIDIAN_MODEL_LOCK_FILE:-$HOME/.hermes/meridian/loops/model-provider.lock}"
 STARTUP_JITTER_SECONDS="${HERMES_MERIDIAN_STARTUP_JITTER_SECONDS:-15}"
 REVIEW_PRIORITY_THRESHOLD="${HERMES_MERIDIAN_REVIEW_PRIORITY_THRESHOLD:-2}"
-REVIEW_PRIORITY_MATTHEW_SLEEP="${HERMES_MERIDIAN_REVIEW_PRIORITY_MATTHEW_SLEEP:-60}"
-REVIEW_PRIORITY_FATIH_SLEEP="${HERMES_MERIDIAN_REVIEW_PRIORITY_FATIH_SLEEP:-900}"
-REVIEW_PRIORITY_PHILIP_SLEEP="${HERMES_MERIDIAN_REVIEW_PRIORITY_PHILIP_SLEEP:-1800}"
-REVIEW_PRIORITY_MATTHEW_MAX_TURNS="${HERMES_MERIDIAN_REVIEW_PRIORITY_MATTHEW_MAX_TURNS:-20}"
-REVIEW_PRIORITY_FATIH_MAX_TURNS="${HERMES_MERIDIAN_REVIEW_PRIORITY_FATIH_MAX_TURNS:-16}"
-REVIEW_PRIORITY_PHILIP_MAX_TURNS="${HERMES_MERIDIAN_REVIEW_PRIORITY_PHILIP_MAX_TURNS:-4}"
+REVIEW_PRIORITY_REVIEWER_SLEEP="${HERMES_MERIDIAN_REVIEW_PRIORITY_MATTHEW_SLEEP:-60}"
+REVIEW_PRIORITY_DEVELOPER_SLEEP="${HERMES_MERIDIAN_REVIEW_PRIORITY_FATIH_SLEEP:-900}"
+REVIEW_PRIORITY_PLANNER_SLEEP="${HERMES_MERIDIAN_REVIEW_PRIORITY_PHILIP_SLEEP:-1800}"
+REVIEW_PRIORITY_REVIEWER_MAX_TURNS="${HERMES_MERIDIAN_REVIEW_PRIORITY_MATTHEW_MAX_TURNS:-20}"
+REVIEW_PRIORITY_DEVELOPER_MAX_TURNS="${HERMES_MERIDIAN_REVIEW_PRIORITY_FATIH_MAX_TURNS:-16}"
+REVIEW_PRIORITY_PLANNER_MAX_TURNS="${HERMES_MERIDIAN_REVIEW_PRIORITY_PHILIP_MAX_TURNS:-4}"
 
 if [[ -z "$ROLE" ]]; then
-  echo "Usage: $0 <philip|fatih|matthew> [workspace] [sleep_seconds] [profile]" >&2
+  echo "Usage: $0 <planner|developer|reviewer> [workspace] [sleep_seconds] [profile]" >&2
+  echo "       Legacy aliases: philip=planner, fatih=developer, matthew=reviewer" >&2
   exit 1
 fi
+
+# Normalize legacy role aliases to canonical phase names
+case "$ROLE" in
+  philip)  ROLE="planner" ;;
+  fatih)   ROLE="developer" ;;
+  matthew) ROLE="reviewer" ;;
+esac
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HERMES_BIN="$ROOT_DIR/venv/bin/hermes"
@@ -59,9 +77,9 @@ load_optional_env_file "$HOME/.hermes/.env"
 
 role_profile() {
   case "$1" in
-    philip) echo "meridian-philip" ;;
-    fatih) echo "meridian-fatih" ;;
-    matthew) echo "meridian-matthew" ;;
+    planner)   echo "meridian-planner" ;;
+    developer) echo "meridian-developer" ;;
+    reviewer)  echo "meridian-reviewer" ;;
     *)
       echo "Unknown role: $1" >&2
       exit 1
@@ -71,9 +89,9 @@ role_profile() {
 
 role_default_sleep() {
   case "$1" in
-    philip) echo 900 ;;
-    fatih) echo 120 ;;
-    matthew) echo 300 ;;
+    planner)   echo 900 ;;
+    developer) echo 120 ;;
+    reviewer)  echo 300 ;;
     *)
       echo "Unknown role: $1" >&2
       exit 1
@@ -87,9 +105,9 @@ role_local_clock() {
 
 role_skill_name() {
   case "$1" in
-    philip) echo "meridian-philip" ;;
-    fatih) echo "meridian-fatih" ;;
-    matthew) echo "meridian-matthew" ;;
+    planner)   echo "meridian-planner" ;;
+    developer) echo "meridian-developer" ;;
+    reviewer)  echo "meridian-reviewer" ;;
     *)
       echo "Unknown role: $1" >&2
       exit 1
@@ -126,9 +144,9 @@ build_prompt() {
   role_skill_name_value="$(role_skill_name "$role")"
 
   case "$role" in
-    philip)
+    planner)
       cat <<EOF
-You are Philip, the Meridian PM and backlog owner.
+You are the Planner for the Meridian project — PM and backlog owner.
 
 Operate only on the Meridian coordination workspace at $WORKSPACE.
 When the Hermes terminal backend is SSH, this workspace path is remote on the project machine.
@@ -157,18 +175,17 @@ Hard boundaries:
 - do not implement code
 - do not perform review approvals
 - do not merge branches
-- do not impersonate Fatih or Matthew
 
 Role bootstrap:
-- the canonical Philip role contract is embedded below; do not call skill_view just to rediscover it
+- the canonical Planner role contract is embedded below; do not call skill_view just to rediscover it
 - only load additional skill files when a specific supporting reference is genuinely needed
 
 Runtime rules:
 - inspect the file-based Meridian task system first
-- inspect customer_support/ for inbound Meridian requests that need a Philip response, summary, or routing decision
+- inspect customer_support/ for inbound Meridian requests that need a response, summary, or routing decision
 - keep this pass read-heavy and decision-heavy, not code-heavy
 - assume the live Meridian code checkout is on the project machine, not the LLM machine; never invent local-path assumptions
-- the shared repo/control plane is sensitive to collisions, so leave code editing to Fatih and keep your own changes to task/customer_support/planning artifacts only
+- the shared repo/control plane is sensitive to collisions, so leave code editing to the Developer and keep your own changes to task/customer_support/planning artifacts only
 
 If there is nothing meaningful to change, say so briefly and stop.
 Make one pass, do the immediate PM work that is clearly justified, then stop cleanly.
@@ -177,9 +194,9 @@ Canonical role skill body:
 $(render_role_skill_body "$role")
 EOF
       ;;
-    fatih)
+    developer)
       cat <<EOF
-You are Fatih, the Meridian implementation developer.
+You are the Developer for the Meridian project — implementation agent.
 
 Operate only on the Meridian coordination workspace at $WORKSPACE.
 When the Hermes terminal backend is SSH, this workspace path is remote on the project machine.
@@ -203,21 +220,20 @@ Your role is strictly implementation:
 - hand completed work to review
 
 Hard boundaries:
-- do not act as Philip
+- do not take on PM work
 - do not approve your own work
 - do not do backlog grooming except creating tightly linked follow-up tasks when necessary
 - do not start broad opportunistic refactors
 
 Role bootstrap:
-- the canonical Fatih role contract is embedded below; do not call skill_view just to rediscover it
+- the canonical Developer role contract is embedded below; do not call skill_view just to rediscover it
 - only load additional skill files when a specific supporting reference is genuinely needed
 
 Runtime rules:
 - if there is no good task in ready, stop instead of inventing work
 - prioritize active request-changes loops before new work
-- assume the real Meridian repo lives on the project machine and may be shared with other personas; never start broad branchless edits that collide with Philip or Matthew
-- if the workspace currently lacks safe branch/worktree isolation, keep changes tightly scoped and task-linked so Philip and Matthew can reason about them later
-- never announce that you will act as Philip; if you are about to do PM work, stop and return to implementation scope
+- assume the real Meridian repo lives on the project machine and may be shared; never start broad branchless edits
+- if the workspace currently lacks safe branch/worktree isolation, keep changes tightly scoped and task-linked
 
 Make one implementation pass, perform the highest-value justified work, then stop cleanly.
 
@@ -225,9 +241,9 @@ Canonical role skill body:
 $(render_role_skill_body "$role")
 EOF
       ;;
-    matthew)
+    reviewer)
       cat <<EOF
-You are Matthew, the Meridian reviewer, architect, and security owner.
+You are the Reviewer for the Meridian project — architect and security owner.
 
 Operate only on the Meridian coordination workspace at $WORKSPACE.
 When the Hermes terminal backend is SSH, this workspace path is remote on the project machine.
@@ -256,7 +272,7 @@ Hard boundaries:
 - do not optimize for speed over rigor; your default posture is skeptical and evidence-seeking
 
 Role bootstrap:
-- the canonical Matthew role contract is embedded below; do not call skill_view just to rediscover it
+- the canonical Reviewer role contract is embedded below; do not call skill_view just to rediscover it
 - only load additional skill files when a specific supporting reference is genuinely needed
 
 Priority rules:
@@ -268,15 +284,12 @@ Priority rules:
   4. if a decision is needed, inspect only the matching files in tasks/review/decisions for that same selected item
   5. only if tasks/review/active is empty, do one short pass over tasks/review/patrol
 - do not recursively scan the whole tasks/review tree
-- do not grep broad MATTHEW.* or PHILIP.* patterns across the repository
 - do not inspect tasks/in-progress, tasks/ready, tasks/backlog, tasks/todo, or orchestration status files while any item exists in tasks/review/active
 - do not review more than 1 active item in a single pass; defer the rest to the next pass
-- if the selected active review item is clearly still in implementation or not yet review-ready, leave a brief targeted note and stop instead of expanding scope
 - when review finds missing commits, missing verification, or unpushed work, send it back explicitly instead of silently stalling
 - when review queue is empty, do a short read-only architecture/security patrol and convert concrete findings into debt/investigation tasks
-- your night patrol should emphasize security review, architecture drift, dependency/package risk, code organization, and creating tech_debt tasks when evidence exists
-- do not wait for Philip or Fatih if a reviewable item is already present
-- small review-contained fixes are allowed when they are low-risk, tightly scoped, and faster than bouncing back to Fatih
+- night patrol emphasis: security review, architecture drift, dependency/package risk, code organization
+- small review-contained fixes are allowed when they are low-risk, tightly scoped, and faster than bouncing back to the Developer
 - do not turn that exception into feature work, broad cleanup, or scope growth
 - assume the code checkout may be shared on the project machine; avoid branchless edits and keep your own writes confined to review artifacts and debt/task outputs
 
@@ -300,9 +313,9 @@ fi
 
 role_default_max_turns() {
   case "$1" in
-    philip) echo 12 ;;
-    fatih) echo 16 ;;
-    matthew) echo 14 ;;
+    planner)   echo 12 ;;
+    developer) echo 16 ;;
+    reviewer)  echo 14 ;;
     *)
       echo "Unknown role: $1" >&2
       exit 1
@@ -324,9 +337,9 @@ role_max_turns() {
 
 role_priority_max_turns() {
   case "$1" in
-    philip) echo "$REVIEW_PRIORITY_PHILIP_MAX_TURNS" ;;
-    fatih) echo "$REVIEW_PRIORITY_FATIH_MAX_TURNS" ;;
-    matthew) echo "$REVIEW_PRIORITY_MATTHEW_MAX_TURNS" ;;
+    planner)   echo "$REVIEW_PRIORITY_PLANNER_MAX_TURNS" ;;
+    developer) echo "$REVIEW_PRIORITY_DEVELOPER_MAX_TURNS" ;;
+    reviewer)  echo "$REVIEW_PRIORITY_REVIEWER_MAX_TURNS" ;;
     *)
       echo "Unknown role: $1" >&2
       exit 1
@@ -342,9 +355,9 @@ role_sleep_seconds_for_current_mode() {
     return
   fi
   case "$role" in
-    philip) echo "$REVIEW_PRIORITY_PHILIP_SLEEP" ;;
-    fatih) echo "$REVIEW_PRIORITY_FATIH_SLEEP" ;;
-    matthew) echo "$REVIEW_PRIORITY_MATTHEW_SLEEP" ;;
+    planner)   echo "$REVIEW_PRIORITY_PLANNER_SLEEP" ;;
+    developer) echo "$REVIEW_PRIORITY_DEVELOPER_SLEEP" ;;
+    reviewer)  echo "$REVIEW_PRIORITY_REVIEWER_SLEEP" ;;
     *)
       echo "Unknown role: $1" >&2
       exit 1
@@ -394,7 +407,7 @@ review_request_changes_count() {
   remote_exec "grep -RIl '^review_outcome: request_changes' tasks/review/decisions 2>/dev/null | wc -l" 2>/dev/null | tr -dc '0-9'
 }
 
-fatih_has_work() {
+developer_has_work() {
   local ready_count request_changes
   ready_count="$(remote_exec "find tasks/ready/ -maxdepth 1 -name '*.md' 2>/dev/null | wc -l" 2>/dev/null | tr -dc '0-9')"
   request_changes="$(review_request_changes_count)"
@@ -431,16 +444,16 @@ review_focus_mode() {
 
 should_run_pass_in_review_focus() {
   local role="$1"
-  if [[ "$role" == "matthew" ]]; then
+  if [[ "$role" == "reviewer" ]]; then
     echo 1
     return
   fi
-  if [[ "$role" == "philip" ]]; then
+  if [[ "$role" == "planner" ]]; then
     # Keep backlog/support/orchestration moving during review-heavy windows.
     echo 1
     return
   fi
-  if [[ "$role" == "fatih" ]]; then
+  if [[ "$role" == "developer" ]]; then
     local request_changes
     request_changes="$(review_request_changes_count)"
     request_changes="${request_changes:-0}"
@@ -501,11 +514,11 @@ while true; do
   IN_REVIEW_FOCUS_MODE="$(review_focus_mode)"
   CURRENT_SLEEP_SECONDS="$(role_sleep_seconds_for_current_mode "$ROLE" "$IN_REVIEW_FOCUS_MODE")"
 
-  # Fatih pre-check: LLM açmadan önce gerçek iş var mı diye bak
-  if [[ "$ROLE" == "fatih" && "$IN_REVIEW_FOCUS_MODE" != "1" ]]; then
-    if [[ "$(fatih_has_work)" != "1" ]]; then
+  # Developer pre-check: LLM açmadan önce gerçek iş var mı diye bak
+  if [[ "$ROLE" == "developer" && "$IN_REVIEW_FOCUS_MODE" != "1" ]]; then
+    if [[ "$(developer_has_work)" != "1" ]]; then
       echo "=== $(date -Is) [$ROLE] profile=$PROFILE workspace=$WORKSPACE ==="
-      echo "[fatih] No ready tasks or request-changes — skipping LLM pass"
+      echo "[developer] No ready tasks or request-changes — skipping LLM pass"
       sleep "$CURRENT_SLEEP_SECONDS"
       continue
     fi
@@ -515,7 +528,7 @@ while true; do
   if [[ "$IN_REVIEW_FOCUS_MODE" == "1" ]]; then
     echo "[$ROLE] review focus mode active"
   fi
-  if [[ "$ROLE" == "matthew" ]]; then
+  if [[ "$ROLE" == "reviewer" ]]; then
     "$HERMES_BIN" -p "$PROFILE" meridian quality --run --workspace "$WORKSPACE" || true
   fi
   if [[ "$IN_REVIEW_FOCUS_MODE" == "1" ]]; then

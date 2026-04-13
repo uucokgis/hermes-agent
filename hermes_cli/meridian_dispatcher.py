@@ -54,6 +54,17 @@ from hermes_utils import atomic_json_write
 
 
 DISPATCHABLE_PERSONAS = frozenset({"philip", "fatih", "matthew"})
+
+# Human-facing display names for internal actor/persona keys.
+# Internal state files and dispatch logic still use the short keys;
+# only the output layer uses these labels.
+PERSONA_DISPLAY_NAMES: dict[str, str] = {
+    "philip": "Planner",
+    "fatih": "Developer",
+    "matthew": "Reviewer",
+    "human": "Human",
+    "idle": "Idle",
+}
 READY_TARGET_DEFAULT = 2
 STALE_TIMEOUTS = {
     "in_progress": timedelta(hours=48),
@@ -921,10 +932,17 @@ def reconcile_meridian(
     return merged
 
 
+def _display_name(key: str | None) -> str:
+    """Return a human-facing label for an internal actor/persona key."""
+    if not key:
+        return "-"
+    return PERSONA_DISPLAY_NAMES.get(key, key)
+
+
 def _print_status(snapshot: dict[str, Any]) -> None:
     queue_counts = snapshot["queue_counts"]
     print("Meridian status")
-    print(f"  Active persona: {snapshot['active_persona']}")
+    print(f"  Active phase:   {_display_name(snapshot['active_persona'])}")
     if snapshot.get("active_task_id") or snapshot.get("active_task_filename"):
         print(
             "  Active task:    "
@@ -934,7 +952,7 @@ def _print_status(snapshot: dict[str, Any]) -> None:
     else:
         print("  Active task:    -")
     print(f"  Workflow state: {snapshot['workflow_state']}")
-    print(f"  Waiting on:     {snapshot['waiting_on']}")
+    print(f"  Waiting on:     {_display_name(snapshot['waiting_on'])}")
     print(
         "  Queue counts:   "
         f"backlog={queue_counts['backlog']} "
@@ -953,7 +971,7 @@ def _print_status(snapshot: dict[str, Any]) -> None:
         first = snapshot["planned_actions"][0]
         print(
             "  Next action:    "
-            f"{first.get('kind')} -> {first.get('actor')}"
+            f"{first.get('kind')} -> {_display_name(first.get('actor'))}"
             f" ({first.get('task_id') or first.get('queue') or '-'})"
         )
         if first.get("reason"):
@@ -1067,7 +1085,7 @@ def _print_leases(snapshot: dict[str, Any]) -> None:
     for lease in worker_leases:
         print(
             "    "
-            f"{lease.get('actor') or '-'} "
+            f"{_display_name(lease.get('actor'))} "
             f"task={lease.get('task_id') or '-'} "
             f"kind={lease.get('kind') or '-'} "
             f"expires_at={lease.get('expires_at') or '-'}"
@@ -1153,7 +1171,7 @@ def _print_dispatch_summary(snapshot: dict[str, Any]) -> None:
         first = actions[0] if actions else {}
         print(
             "  Dispatch:       "
-            f"wake {first.get('actor') or snapshot['active_persona']} "
+            f"wake {_display_name(first.get('actor') or snapshot['active_persona'])} "
             f"for {first.get('task_id') or snapshot.get('active_task_id') or snapshot.get('active_task_filename') or 'the next task'}"
         )
         if len(actions) > 1:
