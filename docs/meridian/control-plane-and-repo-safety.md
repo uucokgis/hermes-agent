@@ -7,7 +7,7 @@ This is the operating model for the current split setup:
 
 For the current deployment that means:
 
-- `106`: Hermes, Telegram gateway, cron, Philip/Fatih/Matthew loops
+- `106`: Hermes, Telegram gateway, cron, and Meridian runtime control
 - `107`: the live Meridian project checkout and git state
 - review-signal execution should run against the real checkout on `107`, even when orchestration and reporting stay on `106`
 
@@ -80,7 +80,7 @@ That is acceptable only if code writing remains tightly constrained.
 ### Fatih
 
 - owns implementation
-- takes only clear `tasks/ready/`
+- takes only the one active `tasks/in_progress/` item or the lowest-order task in `tasks/backlog/`
 - addresses Matthew request-changes loops before new work
 - is the main code-writing persona
 - should sleep outside his implementation window

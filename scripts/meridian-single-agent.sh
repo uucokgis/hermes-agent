@@ -42,6 +42,10 @@ load_optional_env_file() {
 
 load_optional_env_file "$HOME/.hermes/.env"
 
+# Re-read allowlist after loading ~/.hermes/.env so the runtime keeps the
+# focused task scope across plain start/restart calls.
+ALLOWED_TASK_IDS_RAW="${HERMES_MERIDIAN_ALLOWED_TASK_IDS:-$ALLOWED_TASK_IDS_RAW}"
+
 expand_path() {
   local raw="$1"
   if [[ "$raw" == "~" ]]; then printf '%s\n' "$HOME"; return; fi
@@ -91,14 +95,43 @@ remote_exec() {
   fi
 
   local ssh_cmd=(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=8)
-  if [[ -n "$password" ]]; then
-    sshpass -p "$password" "${ssh_cmd[@]}" \
-      -o PreferredAuthentications=password \
-      -o PubkeyAuthentication=no \
-      "$user@$host" "cd '$WORKSPACE' && $*"
+  if [[ -n "$key" ]]; then
+    ssh_cmd+=(-i "$key")
+    "${ssh_cmd[@]}" "$user@$host" "cd '$WORKSPACE' && $*"
     return $?
   fi
-  if [[ -n "$key" ]]; then ssh_cmd+=(-i "$key"); fi
+
+  if [[ -n "$password" ]]; then
+    if command -v sshpass >/dev/null 2>&1; then
+      sshpass -p "$password" "${ssh_cmd[@]}" \
+        -o PreferredAuthentications=password \
+        -o PubkeyAuthentication=no \
+        "$user@$host" "cd '$WORKSPACE' && $*"
+      return $?
+    fi
+
+    if command -v python3 >/dev/null 2>&1 && python3 -c 'import paramiko' >/dev/null 2>&1; then
+      python3 - "$host" "$user" "$password" "$WORKSPACE" "$*" <<'PY'
+import sys
+import paramiko
+
+host, user, password, workspace, command = sys.argv[1:6]
+client = paramiko.SSHClient()
+client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+client.connect(hostname=host, username=user, password=password, look_for_keys=False, allow_agent=False, timeout=8)
+stdin, stdout, stderr = client.exec_command(f"cd '{workspace}' && {command}")
+sys.stdout.write(stdout.read().decode("utf-8", errors="replace"))
+sys.stderr.write(stderr.read().decode("utf-8", errors="replace"))
+exit_status = stdout.channel.recv_exit_status()
+client.close()
+sys.exit(exit_status)
+PY
+      return $?
+    fi
+
+    echo "remote workspace requires sshpass or python3+paramiko for password auth" >&2
+    return 1
+  fi
   "${ssh_cmd[@]}" "$user@$host" "cd '$WORKSPACE' && $*"
 }
 
@@ -113,25 +146,38 @@ task_queue_count() {
   local queue="$1"
   local status_pattern=""
   local allowed_pattern=""
-  local find_expr=""
+  local base_cmd=""
   case "$queue" in
     review)        status_pattern='^(status:[[:space:]]*(review|ready_for_review|READY_FOR_REVIEW))$' ;;
-    ready)         status_pattern='^(status:[[:space:]]*ready)$' ;;
-    waiting_human) status_pattern='^(status:[[:space:]]*waiting_human)$' ;;
     in_progress)   status_pattern='^(status:[[:space:]]*(in_progress|in-progress|claimed))$' ;;
   esac
 
   allowed_pattern="$(allowed_task_pattern)"
-  if [[ -n "$allowed_pattern" ]]; then
-    find_expr=" | grep -E '/(${allowed_pattern})([-.].*)?\\.md$'"
-  fi
+
+  case "$queue" in
+    in_progress)
+      base_cmd="find tasks/in_progress tasks/in-progress -maxdepth 1 -type f -name '*.md' ! -name 'README.md' 2>/dev/null"
+      ;;
+    review)
+      base_cmd="find tasks/review tasks/review/active -maxdepth 1 -type f -name '*.md' ! -name 'README.md' 2>/dev/null"
+      ;;
+    *)
+      base_cmd="find tasks/$queue -maxdepth 1 -type f -name '*.md' ! -name 'README.md' 2>/dev/null"
+      ;;
+  esac
 
   if [[ -n "$status_pattern" ]]; then
-    remote_exec "find tasks/in_progress tasks/in-progress -maxdepth 1 -type f -name '*.md' ! -name 'README.md' 2>/dev/null${find_expr} | xargs -I{} sh -c 'grep -lE \"$status_pattern\" \"\$1\" 2>/dev/null || true' sh {} 2>/dev/null | wc -l" 2>/dev/null | tr -dc '0-9'
+    if [[ -n "$allowed_pattern" ]]; then
+      base_cmd="$base_cmd | grep -E '/(${allowed_pattern})([-.].*)?\\.md$' 2>/dev/null"
+    fi
+    remote_exec "$base_cmd | xargs -r grep -lE \"$status_pattern\" 2>/dev/null | wc -l" 2>/dev/null | tr -dc '0-9'
     return
   fi
 
-  remote_exec "find tasks/$queue -maxdepth 1 -type f -name '*.md' ! -name 'README.md' -exec sh -c 'for f do IFS= read -r first <\"\$f\" || true; [ \"\$first\" = \"---\" ] && echo \"\$f\"; done' sh {} + 2>/dev/null${find_expr} | wc -l" 2>/dev/null | tr -dc '0-9'
+  if [[ -n "$allowed_pattern" ]]; then
+    base_cmd="$base_cmd | grep -E '/(${allowed_pattern})([-.].*)?\\.md$' 2>/dev/null"
+  fi
+  remote_exec "$base_cmd | wc -l" 2>/dev/null | tr -dc '0-9'
 }
 
 customer_support_count() {
@@ -139,13 +185,7 @@ customer_support_count() {
 }
 
 pick_mode() {
-  local in_progress_count review_count ready_count waiting_count inbox_count
-
-  in_progress_count="$(task_queue_count in_progress)"
-  if [[ "$in_progress_count" =~ ^[0-9]+$ ]] && (( in_progress_count > 0 )); then
-    echo "implement"
-    return
-  fi
+  local in_progress_count review_count backlog_count inbox_count
 
   review_count="$(task_queue_count review)"
   if [[ "$review_count" =~ ^[0-9]+$ ]] && (( review_count > 0 )); then
@@ -153,17 +193,21 @@ pick_mode() {
     return
   fi
 
-  ready_count="$(task_queue_count ready)"
-  if [[ "$ready_count" =~ ^[0-9]+$ ]] && (( ready_count > 0 )); then
+  in_progress_count="$(task_queue_count in_progress)"
+  if [[ "$in_progress_count" =~ ^[0-9]+$ ]] && (( in_progress_count > 0 )); then
     echo "implement"
     return
   fi
 
-  waiting_count="$(task_queue_count waiting_human)"
+  backlog_count="$(task_queue_count backlog)"
+  if [[ "$backlog_count" =~ ^[0-9]+$ ]] && (( backlog_count > 0 )); then
+    echo "implement"
+    return
+  fi
+
   inbox_count="$(customer_support_count)"
-  if { [[ "$waiting_count" =~ ^[0-9]+$ ]] && (( waiting_count > 0 )); } ||
-     { [[ "$inbox_count"   =~ ^[0-9]+$ ]] && (( inbox_count > 0 )); }; then
-    echo "idle"
+  if [[ "$inbox_count" =~ ^[0-9]+$ ]] && (( inbox_count > 0 )); then
+    echo "plan"
     return
   fi
 
@@ -206,12 +250,11 @@ Runtime shape:
 Single-slot rules (STRICT):
 - Claim and implement EXACTLY ONE task per pass. Do not pick a second task.
 - If you already have a task in tasks/in_progress or tasks/in-progress, continue that task first.
-- If the in_progress task is marked waiting_human or otherwise blocked, stop cleanly and do NOT pick anything else.
 - Complete the task end-to-end: implement, pass verify.sh, commit, move to tasks/review.
 - Do NOT stop mid-task and leave it in_progress. Finish before this pass ends.
 - Do NOT check the review queue or switch to review work in this pass.
-- Only pick from tasks/ready unless a review artifact explicitly sends a task back via request_changes.
-- If nothing actionable is ready and nothing is in_progress, stop cleanly.
+- If there is no task in progress, pick the lowest-order actionable task from tasks/backlog.
+- If nothing actionable is in_progress or backlog, stop cleanly.
 - If more than one task looks possible, prefer the existing in_progress task; otherwise stop and report ambiguity briefly.
 - Keep changes narrow, production-safe, and easy to review.
 - Do not do backlog shaping, support triage, or broad PM work in this pass.
@@ -219,7 +262,7 @@ Single-slot rules (STRICT):
 - Do not create new tasks, debt, investigations, or follow-up projects.
 - Allowed outcomes only:
   1. task moved to review with passing verification
-  2. task moved to waiting_human with a precise blocker note
+  2. task moved back to backlog with a precise blocker note and lower order
   3. clean stop because nothing actionable exists
 
 Blocker escalation rule (IMPORTANT):
@@ -230,14 +273,15 @@ If you hit an infrastructure or environment blocker that you CANNOT resolve your
   - broken CI environment or test runner that is a machine-level issue
   - any other "needs human hands on the machine" problem
 Then you MUST:
-  1. transition the task from in_progress -> waiting_human using task_transition
+  1. transition the task from in_progress -> backlog using task_transition or the task-file workflow
   2. write a clear blocker note in the task file:
      - exactly what you tried (commands, error output)
      - what is missing and why you can't install/fix it yourself
      - what the human needs to do to unblock you
+     - the lowered order that should bring the task back sooner after unblocking
   3. stop this pass cleanly - do NOT keep retrying the same failing approach
   4. do NOT pretend the task is done or move it to review with a broken verification
-The human (Umut) monitors waiting_human via Telegram and will resolve blockers directly.
+The human (Umut) monitors the backlog and inbox directly and will resolve blockers there.
 EOF
       ;;
     review)
@@ -264,7 +308,7 @@ Review mode rules:
 - Your job: approve low-risk review-ready work, or send it back with precise requested changes.
 - Do NOT implement review fixes in the always-on runtime. If code changes are needed, send the task back.
 - Do NOT create new debt, patrol, or investigation tasks from this pass unless the current reviewed task explicitly requires that artifact.
-- When a task is approved, mark it done/closed. When it needs changes, keep the outcome narrowly tied to the current task.
+- When a task is approved, delete it. When it needs changes, move it back to backlog with a lower order and keep the outcome narrowly tied to the current task.
 - If no review-ready work exists, stop cleanly.
 - Do not invent patrol work.
 - Review only the task, branch, diff, and verification evidence. Do not wander.
@@ -283,18 +327,18 @@ Profile contract:
 
 Runtime shape:
 - this runtime is not a constantly running Planner daemon
-- this plan pass only wakes for waiting-human or inbox/intake work
+- this plan pass wakes for inbox/intake work or explicit backlog reprioritization
 - the live project checkout is on this machine at $WORKSPACE
 - Jira is the primary backlog system
-- tasks/ is only for execution packets, review notes, debt evidence, waiting_human items, and similar delivery artifacts
-- Be terse. Only process explicit inbox or waiting-human work.
+- tasks/ is only for the short-horizon execution queue and related review artifacts
+- Be terse. Only process explicit inbox or backlog-order work.
 - If \`HERMES_MERIDIAN_ALLOWED_TASK_IDS\` is set, do not create or update task artifacts outside that allowlist unless the human explicitly asks.
 
 Plan mode rules:
-- Inspect customer_support/inbox and tasks/waiting_human first.
+- Inspect customer_support/inbox first, then backlog ordering when needed.
 - Shape work, clarify scope, and create or update execution artifacts only when needed.
 - Do not mirror the entire Jira backlog into markdown.
-- This mode is for explicit human-triggered intake only; do not treat inbox or waiting_human as auto-actionable in the always-on loop.
+- This mode is for explicit human-triggered intake or reprioritization only; do not treat it as a background PM sweep.
 - Do not create new tasks unless an explicit human request or inbox item requires one.
 - Do not write production code.
 - If there is no meaningful intake or clarification work, stop cleanly.
@@ -359,7 +403,7 @@ status_runtime() {
   if [[ -n "$ALLOWED_TASK_IDS_RAW" ]]; then
     echo "allowed_task_ids=$ALLOWED_TASK_IDS_RAW"
   fi
-  echo "queues: in_progress=$(task_queue_count in_progress) review=$(task_queue_count review) ready=$(task_queue_count ready) waiting_human=$(task_queue_count waiting_human) inbox=$(customer_support_count)"
+  echo "queues: backlog=$(task_queue_count backlog) in_progress=$(task_queue_count in_progress) review=$(task_queue_count review) inbox=$(customer_support_count)"
 }
 
 start_runtime() {

@@ -4,12 +4,12 @@ This is the recommended Meridian deployment shape for the current 106/107 topolo
 
 ## Goal
 
-Run Meridian with one focused agent workflow instead of three polling personas.
+Run Meridian with one focused agent workflow instead of multiple polling personas.
 
 - `106`: Hermes gateway and optional control scripts
 - `107`: live Meridian checkout at `/home/umut/meridian`
 - one active task branch at a time
-- one agent session per task
+- one runtime entrypoint: `scripts/meridian-single-agent.sh`
 - a fresh review pass before push and merge
 
 ## Why this shape
@@ -21,16 +21,17 @@ The old Philip/Fatih/Matthew daemon split did not create true parallelism.
 - polling created context churn
 - Matthew and Philip woke too often without enough throughput gain
 
-The single-agent model keeps the useful planning, implementation, and review lenses but removes daemon and profile overhead.
+The single-agent model keeps the useful planning, implementation, and review lenses but removes daemon and profile overhead. `scripts/meridian-role-loop.sh` now exists only as a compatibility wrapper into `scripts/meridian-single-agent.sh`.
 
 ## Workflow behavior
 
 Priority order:
 
 1. `tasks/review/` -> Matthew-style review pass on the active branch
-2. `tasks/ready/` -> Fatih-style implementation pass on a new task branch
-3. `tasks/waiting_human/` or `customer_support/inbox/` -> Philip-style planning pass
-4. otherwise -> stop cleanly instead of keeping an idle daemon alive
+2. `tasks/in_progress/` -> Fatih-style implementation continuation on the active branch
+3. `tasks/backlog/` -> Fatih-style implementation pass on the lowest-order task
+4. `customer_support/inbox/` -> Philip-style planning pass
+5. otherwise -> stop cleanly instead of keeping an idle daemon alive
 
 Jira remains the primary backlog system.
 `tasks/` is only the execution and review artifact system.

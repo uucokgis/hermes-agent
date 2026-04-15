@@ -1,6 +1,6 @@
 # Agentic Workflow MVP
 
-This document defines the file-based, LLM-first task system for the Meridian single-agent workflow.
+This document defines the file-based, LLM-first task system for the Meridian single-runtime workflow.
 
 ## Working Lenses
 
@@ -14,14 +14,15 @@ This document defines the file-based, LLM-first task system for the Meridian sin
 ### Fatih Lens
 - Role: implementation developer
 - Owns: code changes, tests, PR preparation, implementation notes
-- Pulls only tasks that are ready and well-scoped
+- Pulls the lowest-`order` backlog task when implementation work exists
+- Keeps `tasks/in_progress/` limited to one item at a time
 - Creates a task branch, commits the work, and sends it to a fresh Matthew review pass by default
 
 ### Matthew Review Lens
 - Role: reviewer, architect, and security triage
-- Owns: code review, architecture review, regression risk detection, scanner triage, technical debt creation
+- Owns: code review, architecture review, regression risk detection, scanner triage
 - Reviews Fatih's work before merge
-- Consumes GitHub Dependabot and other security signals, then turns real findings into tasks instead of flooding the backlog with raw alerts
+- Consumes GitHub Dependabot and other security signals, then turns real findings into precise backlog updates instead of flooding the queue with raw alerts
 - Consumes review evidence after implementation handoff
 
 ## Source of Truth
@@ -31,7 +32,7 @@ The canonical workflow context for agents working on Meridian lives in:
 - `tasks/`
 
 Jira is the primary backlog and prioritization system.
-The markdown `tasks/` tree is the execution and review artifact system that the runtime moves through locally.
+The markdown `tasks/` tree is the short-horizon execution queue that the runtime moves through locally.
 
 We are not using a single `tasks.json` file as the source of truth.
 
@@ -58,15 +59,9 @@ It is not part of the delivery queue state machine; the Philip lens owns it as a
 ```text
 tasks/
   backlog/
-  claimed/
-  debt/
-  done/
   in_progress/
-  orchestration/
-  ready/
   review/
   templates/
-  waiting_human/
 ```
 
 ## Runtime Model
@@ -76,7 +71,7 @@ There is one Meridian execution flow for the project workspace.
 - The agent works directly in the live Meridian checkout on `107`.
 - Its default working posture is the implementation-first Fatih lens.
 - Review is a fresh Matthew pass against the task branch and `tasks/review/`.
-- Planning and intake are on-demand Philip passes triggered by `tasks/waiting_human/` or `customer_support/inbox/`.
+- Planning and intake are on-demand Philip passes triggered by `customer_support/inbox/` or explicit reprioritization needs.
 - We no longer run three separate polling daemons or role profiles.
 
 This keeps the single available model slot focused on one meaningful task at a time.
@@ -86,21 +81,14 @@ This keeps the single available model slot focused on one meaningful task at a t
 Default flow:
 
 1. A Jira item or support request needs execution.
-2. The Philip lens creates or refines the execution packet in `tasks/backlog/` or `tasks/ready/`.
+2. The Philip lens creates or refines the execution packet in `tasks/backlog/` and assigns an `order`.
 3. The Fatih lens moves the task to `tasks/in_progress/`, creates a task branch, and implements the change.
 4. The Fatih lens updates implementation notes, records branch and commit metadata, and moves the task to `tasks/review/`.
 5. A fresh Matthew review pass runs.
 6. Matthew either:
-- returns it to `tasks/in_progress/` with review notes
-- approves push and merge, then moves it to `tasks/done/`
-- creates linked debt or follow-up tasks if needed
-
-Debt flow:
-
-1. Matthew detects a risk, architectural issue, or vulnerability.
-2. Matthew verifies there is enough evidence to avoid low-signal noise.
-3. Matthew creates a task in `tasks/debt/`.
-4. Philip later promotes it to Jira, `tasks/backlog/`, or `tasks/ready/` based on priority.
+- returns it to `tasks/backlog/` with review notes and a lower `order`
+- approves the work and deletes the task file
+- records any non-blocking concerns directly in the review output
 
 ## Task Types
 
@@ -171,8 +159,9 @@ Matthew should review before push or merge unless there is an explicit emergency
 Meridian is event-driven inside one workflow, not three independent polling daemons.
 
 - Review has the highest priority while `tasks/review/` is non-empty.
-- Implementation wakes when `tasks/ready/` has actionable work.
-- Planning wakes only for `tasks/waiting_human/` or `customer_support/inbox/` work.
+- Implementation continues while `tasks/in_progress/` contains one active item.
+- If implementation is idle, the next lowest-`order` task from `tasks/backlog/` becomes the next candidate.
+- Planning wakes for `customer_support/inbox/` or explicit reprioritization work.
 - If no meaningful event exists, the workflow stops cleanly instead of keeping a polling daemon alive.
 
 ## Shared Repo Safety

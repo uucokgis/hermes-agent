@@ -155,11 +155,8 @@ Large context windows may be available, but they are not the primary coordinatio
 
 Queue membership is derived from the task file's directory:
 - `tasks/backlog/`
-- `tasks/ready/`
 - `tasks/in_progress/`
 - `tasks/review/`
-- `tasks/done/`
-- `tasks/debt/`
 
 ### Task Metadata
 
@@ -167,6 +164,7 @@ Each task file should contain enough metadata for deterministic orchestration.
 
 Required fields:
 - `id`
+- `order`
 - `title`
 - `type`
 - `priority`
