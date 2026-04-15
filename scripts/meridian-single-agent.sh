@@ -14,6 +14,7 @@ IDLE_SLEEP_SECONDS="${HERMES_MERIDIAN_IDLE_SLEEP_SECONDS:-180}"
 PASS_TIMEOUT_SECONDS="${HERMES_MERIDIAN_PASS_TIMEOUT_SECONDS:-1800}"
 STARTUP_JITTER_SECONDS="${HERMES_MERIDIAN_STARTUP_JITTER_SECONDS:-10}"
 SERIALIZE_MODEL_ACCESS="${HERMES_MERIDIAN_SERIALIZE_MODEL_ACCESS:-1}"
+ALLOWED_TASK_IDS_RAW="${HERMES_MERIDIAN_ALLOWED_TASK_IDS:-}"
 MODEL_LOCK_FILE="${HERMES_MERIDIAN_MODEL_LOCK_FILE:-$HOME/.hermes/meridian/runtime/model-provider.lock}"
 STATE_DIR="${HOME}/.hermes/meridian/runtime"
 PID_FILE="${STATE_DIR}/meridian.pid"
@@ -52,18 +53,23 @@ role_local_clock() {
   TZ="$TIMEZONE_NAME" date '+%Y-%m-%d %H:%M:%S %Z'
 }
 
-render_skill_body() {
-  local role="$1"
-  local skill_path="$ROOT_DIR/skills/meridian/$role/SKILL.md"
-  if [[ ! -f "$skill_path" ]]; then
-    echo "Missing Meridian role skill: $skill_path" >&2
-    exit 1
-  fi
-  awk '
-    NR == 1 && $0 == "---" { in_frontmatter = 1; next }
-    in_frontmatter && $0 == "---" { in_frontmatter = 0; next }
-    !in_frontmatter { print }
-  ' "$skill_path"
+allowed_task_pattern() {
+  local raw="$ALLOWED_TASK_IDS_RAW"
+  local token trimmed out=""
+
+  [[ -z "$raw" ]] && return 0
+
+  IFS=',' read -r -a _allowed_tokens <<< "$raw"
+  for token in "${_allowed_tokens[@]}"; do
+    trimmed="$(printf '%s' "$token" | tr -cd '[:alnum:]_.-')"
+    [[ -z "$trimmed" ]] && continue
+    if [[ -n "$out" ]]; then
+      out="${out}|"
+    fi
+    out="${out}${trimmed}"
+  done
+
+  [[ -n "$out" ]] && printf '%s' "$out"
 }
 
 remote_exec() {
@@ -107,6 +113,8 @@ ensure_workspace_access() {
 task_queue_count() {
   local queue="$1"
   local status_pattern=""
+  local allowed_pattern=""
+  local find_expr=""
   case "$queue" in
     review)       status_pattern='^(status:[[:space:]]*(review|ready_for_review|READY_FOR_REVIEW))$' ;;
     ready)        status_pattern='^(status:[[:space:]]*ready)$' ;;
@@ -114,12 +122,17 @@ task_queue_count() {
     in_progress)  status_pattern='^(status:[[:space:]]*(in_progress|in-progress|claimed))$' ;;
   esac
 
+  allowed_pattern="$(allowed_task_pattern)"
+  if [[ -n "$allowed_pattern" ]]; then
+    find_expr=" | grep -E '/(${allowed_pattern})([-.].*)?\\.md$'"
+  fi
+
   if [[ -n "$status_pattern" ]]; then
-    remote_exec "find tasks/in_progress tasks/in-progress -maxdepth 1 -type f -name '*.md' ! -name 'README.md' 2>/dev/null | xargs -I{} sh -c 'grep -lE \"$status_pattern\" \"\$1\" 2>/dev/null || true' sh {} 2>/dev/null | wc -l" 2>/dev/null | tr -dc '0-9'
+    remote_exec "find tasks/in_progress tasks/in-progress -maxdepth 1 -type f -name '*.md' ! -name 'README.md' 2>/dev/null${find_expr} | xargs -I{} sh -c 'grep -lE \"$status_pattern\" \"\$1\" 2>/dev/null || true' sh {} 2>/dev/null | wc -l" 2>/dev/null | tr -dc '0-9'
     return
   fi
 
-  remote_exec "find tasks/$queue -maxdepth 1 -type f -name '*.md' ! -name 'README.md' -exec sh -c 'for f do IFS= read -r first <\"\$f\" || true; [ \"\$first\" = \"---\" ] && echo \"\$f\"; done' sh {} + 2>/dev/null | wc -l" 2>/dev/null | tr -dc '0-9'
+  remote_exec "find tasks/$queue -maxdepth 1 -type f -name '*.md' ! -name 'README.md' -exec sh -c 'for f do IFS= read -r first <\"\$f\" || true; [ \"\$first\" = \"---\" ] && echo \"\$f\"; done' sh {} + 2>/dev/null${find_expr} | wc -l" 2>/dev/null | tr -dc '0-9'
 }
 
 customer_support_count() {
@@ -151,11 +164,14 @@ pick_mode() {
     return
   fi
 
+  # waiting_human and inbox items are NOT auto-actionable in the always-on
+  # runtime. They require an explicit human-triggered planning pass so the
+  # agent does not invent new work or reopen stale threads on its own.
   waiting_count="$(task_queue_count waiting_human)"
   inbox_count="$(customer_support_count)"
   if { [[ "$waiting_count" =~ ^[0-9]+$ ]] && (( waiting_count > 0 )); } ||
      { [[ "$inbox_count"   =~ ^[0-9]+$ ]] && (( inbox_count > 0 )); }; then
-    echo "plan"
+    echo "idle"
     return
   fi
 
@@ -164,9 +180,9 @@ pick_mode() {
 
 mode_max_turns() {
   case "$1" in
-    implement) echo "${HERMES_MERIDIAN_IMPLEMENT_MAX_TURNS:-22}" ;;
-    review)    echo "${HERMES_MERIDIAN_REVIEW_MAX_TURNS:-14}" ;;
-    plan)      echo "${HERMES_MERIDIAN_PLAN_MAX_TURNS:-10}" ;;
+    implement) echo "${HERMES_MERIDIAN_IMPLEMENT_MAX_TURNS:-12}" ;;
+    review)    echo "${HERMES_MERIDIAN_REVIEW_MAX_TURNS:-8}" ;;
+    plan)      echo "${HERMES_MERIDIAN_PLAN_MAX_TURNS:-6}" ;;
     *) echo "Unknown mode: $1" >&2; exit 1 ;;
   esac
 }
@@ -192,20 +208,44 @@ Runtime shape:
 - the live project checkout is on this machine at $WORKSPACE
 - Jira is the primary backlog system; tasks/ is the execution and review artifact system
 - this invocation is an isolated implementation session
+- Be terse. Do the work or stop. Do not narrate long plans.
+- If `HERMES_MERIDIAN_ALLOWED_TASK_IDS` is set, you may act ONLY on those task IDs.
 
 Single-slot rules (STRICT):
 - Claim and implement EXACTLY ONE task per pass. Do not pick a second task.
 - If you already have a task in tasks/in_progress or tasks/in-progress, continue that task first.
+- If the in_progress task is marked waiting_human or otherwise blocked, stop cleanly and do NOT pick anything else.
 - Complete the task end-to-end: implement, pass verify.sh, commit, move to tasks/review.
 - Do NOT stop mid-task and leave it in_progress. Finish before this pass ends.
 - Do NOT check the review queue or switch to review work in this pass.
 - Only pick from tasks/ready unless a review artifact explicitly sends a task back via request_changes.
 - If nothing actionable is ready and nothing is in_progress, stop cleanly.
+- If more than one task looks possible, prefer the existing in_progress task; otherwise stop and report ambiguity briefly.
 - Keep changes narrow, production-safe, and easy to review.
 - Do not do backlog shaping, support triage, or broad PM work in this pass.
+- Do not read the whole repo. Read only files needed for the active task.
+- Do not create new tasks, debt, investigations, or follow-up projects.
+- Allowed outcomes only:
+  1. task moved to review with passing verification
+  2. task moved to waiting_human with a precise blocker note
+  3. clean stop because nothing actionable exists
 
-Canonical Developer role body:
-$(render_skill_body developer)
+Blocker escalation rule (IMPORTANT):
+If you hit an infrastructure or environment blocker that you CANNOT resolve yourself — such as:
+  - missing system library (GDAL, GEOS, PROJ, etc.) not installable inside the container
+  - SSL/TLS certificate issue outside your control
+  - missing secret, credential, or API key you don't have access to
+  - broken CI environment or test runner that is a machine-level issue
+  - any other "needs human hands on the machine" problem
+Then you MUST:
+  1. transition the task from in_progress → waiting_human using task_transition
+  2. write a clear blocker note in the task file:
+     - exactly what you tried (commands, error output)
+     - what is missing and why you can't install/fix it yourself
+     - what the human needs to do to unblock you
+  3. stop this pass cleanly — do NOT keep retrying the same failing approach
+  4. do NOT pretend the task is done or move it to review with a broken verification
+The human (Umut) monitors waiting_human via Telegram and will resolve blockers directly.
 EOF
       ;;
     review)
@@ -223,25 +263,20 @@ Runtime shape:
 - treat this pass as an isolated review session
 - the live project checkout is on this machine at $WORKSPACE
 - Jira is the primary backlog system; tasks/ is the execution and review artifact system
+- Be terse. Review the current task only.
+- If `HERMES_MERIDIAN_ALLOWED_TASK_IDS` is set, review ONLY those task IDs.
 
 Review mode rules:
 - Start with tasks/review; only treat files with frontmatter status review or ready_for_review as actionable.
 - Ignore legacy summaries, patrol notes, approvals, and historical artifacts in tasks/review.
-- Your job: approve, or fix small issues inline, or create debt for large issues.
-- INLINE FIX RULE: If the required change is small (≤ ~25 lines across ≤ 3 files), apply the fix yourself:
-    1. Make the code change.
-    2. Run verify.sh and confirm it passes.
-    3. Commit with a message referencing the task.
-    4. Move the task to tasks/done (or tasks/review/archive if done/ does not exist).
-    5. Do NOT create a request_changes artifact — just close the task directly.
-- BOUNCE-BACK rule: Only create a request_changes artifact when the rework is substantial (architectural
-  changes, new features, many files). Erring on the side of inline fixes is preferred.
-- When a task is approved or fixed inline, mark it done/closed. Do not leave it lingering in review.
+- Your job: approve low-risk review-ready work, or send it back with precise requested changes.
+- Do NOT implement review fixes in the always-on runtime. If code changes are needed, send the task back.
+- Do NOT create new debt, patrol, or investigation tasks from this pass unless the current reviewed task explicitly requires that artifact.
+- When a task is approved, mark it done/closed. When it needs changes, keep the outcome narrowly tied to the current task.
 - If no review-ready work exists, stop cleanly.
-- Do not invent patrol work while review items exist.
-
-Canonical Reviewer role body:
-$(render_skill_body reviewer)
+- Do not invent patrol work.
+- Review only the task, branch, diff, and verification evidence. Do not wander.
+- Do not create side quests. Put non-blocking notes in the review output and stop.
 EOF
       ;;
     plan)
@@ -260,16 +295,17 @@ Runtime shape:
 - the live project checkout is on this machine at $WORKSPACE
 - Jira is the primary backlog system
 - tasks/ is only for execution packets, review notes, debt evidence, waiting_human items, and similar delivery artifacts
+- Be terse. Only process explicit inbox or waiting-human work.
+- If `HERMES_MERIDIAN_ALLOWED_TASK_IDS` is set, do not create or update task artifacts outside that allowlist unless the human explicitly asks.
 
 Plan mode rules:
 - Inspect customer_support/inbox and tasks/waiting_human first.
 - Shape work, clarify scope, and create or update execution artifacts only when needed.
 - Do not mirror the entire Jira backlog into markdown.
+- This mode is for explicit human-triggered intake only; do not treat inbox or waiting_human as auto-actionable in the always-on loop.
+- Do not create new tasks unless an explicit human request or inbox item requires one.
 - Do not write production code.
 - If there is no meaningful intake or clarification work, stop cleanly.
-
-Canonical Planner role body:
-$(render_skill_body planner)
 EOF
       ;;
     *)
@@ -328,6 +364,9 @@ status_runtime() {
     fi
   fi
   echo "meridian | profile=$PROFILE | $status | workspace=$WORKSPACE | log=$LOG_FILE"
+  if [[ -n "$ALLOWED_TASK_IDS_RAW" ]]; then
+    echo "allowed_task_ids=$ALLOWED_TASK_IDS_RAW"
+  fi
   echo "queues: in_progress=$(task_queue_count in_progress) review=$(task_queue_count review) ready=$(task_queue_count ready) waiting_human=$(task_queue_count waiting_human) inbox=$(customer_support_count)"
 }
 
@@ -349,6 +388,7 @@ start_runtime() {
     HERMES_MERIDIAN_WORKSPACE="$WORKSPACE" \
     HERMES_MERIDIAN_PROFILE="$PROFILE" \
     HERMES_MERIDIAN_TIMEZONE="$TIMEZONE_NAME" \
+    HERMES_MERIDIAN_ALLOWED_TASK_IDS="$ALLOWED_TASK_IDS_RAW" \
     HERMES_MERIDIAN_ACTIVE_SLEEP_SECONDS="$ACTIVE_SLEEP_SECONDS" \
     HERMES_MERIDIAN_IDLE_SLEEP_SECONDS="$IDLE_SLEEP_SECONDS" \
     HERMES_MERIDIAN_PASS_TIMEOUT_SECONDS="$PASS_TIMEOUT_SECONDS" \
