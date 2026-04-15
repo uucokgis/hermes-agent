@@ -1575,6 +1575,10 @@ class TelegramAdapter(BasePlatformAdapter):
             except Exception:
                 pass
 
+        # Re-send keyboard so user doesn't need to type /meridian again
+        if query.message:
+            await self._send_meridian_keyboard_menu(query.message)
+
     async def send_voice(
         self,
         chat_id: str,
@@ -2202,6 +2206,24 @@ class TelegramAdapter(BasePlatformAdapter):
         text = update.message.text.strip()
         bare_cmd = text.split()[0].lstrip("/").split("@")[0].lower()
         if bare_cmd == "meridian" and len(text.split()) == 1:
+            await self._send_meridian_keyboard_menu(update.message)
+            return
+
+        # Meridian subcommands: dispatch inline so we can append keyboard menu
+        if bare_cmd.startswith("meridian"):
+            event = self._build_message_event(update.message, MessageType.COMMAND)
+            try:
+                response = await self._message_handler(event)
+                if response:
+                    _meta = {"thread_id": event.source.thread_id} if event.source.thread_id else None
+                    await self._send_with_retry(
+                        chat_id=event.source.chat_id,
+                        content=response,
+                        reply_to=event.message_id,
+                        metadata=_meta,
+                    )
+            except Exception as exc:
+                logger.error("Meridian inline dispatch failed: %s", exc)
             await self._send_meridian_keyboard_menu(update.message)
             return
 

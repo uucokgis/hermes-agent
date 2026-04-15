@@ -4344,8 +4344,8 @@ class GatewayRunner:
             pass
 
         # Role loop status (compact)
-        role_emoji = {"philip": "🎯", "fatih": "🔧", "matthew": "🔍"}
-        for role in ("philip", "fatih", "matthew"):
+        role_emoji = {"planner": "🎯", "developer": "🔧", "reviewer": "🔍"}
+        for role in ("planner", "developer", "reviewer"):
             try:
                 state = role_loop_state(role)
                 status_icon = "🟢" if state.get("running") else "🔴"
@@ -4360,7 +4360,7 @@ class GatewayRunner:
             except Exception:
                 lines.append(f"❓ **{role.capitalize()}**: durum alınamadı")
 
-        lines.extend(["", "_Detay için:_ `/meridian_watch philip`"])
+        lines.extend(["", "_Detay için:_ `/meridian_watch`"])
         return "\n".join(lines)
 
     def _meridian_flow_state(self) -> dict[str, dict[str, Any]]:
@@ -4536,7 +4536,7 @@ class GatewayRunner:
         import os, re
         from datetime import datetime, timezone, timedelta
 
-        agents = ("philip", "fatih", "matthew")
+        agents = ("planner", "developer", "reviewer")
         loop_log_dir = "~/.hermes/meridian/loops"
         since_utc = datetime.now(timezone.utc) - timedelta(hours=hours)
         since_hour = since_utc.hour
@@ -4600,7 +4600,7 @@ print(json.dumps(result))
             except Exception:
                 pass
 
-        emoji = {"philip": "🎯", "fatih": "🔧", "matthew": "🔍"}
+        emoji = {"planner": "🎯", "developer": "🔧", "reviewer": "🔍"}
         lines = [f"🕐 **Son {hours} saatte ne yapıldı?**", ""]
         for agent in agents:
             sessions = data.get(agent, [])
@@ -4643,14 +4643,12 @@ print(json.dumps(result))
     async def _handle_meridian_watch_command(self, event: MessageEvent) -> str:
         raw_args = event.get_command_args().strip()
         if not raw_args:
-            session_key = self._session_key_for_source(event.source)
-            self._set_meridian_flow(session_key, {"kind": "watch", "step": "role"})
-            return "Hangi persona logunu izleyelim? `philip`, `fatih`, `matthew` ya da `status` yaz."
+            return await self._start_meridian_watch(event.source, "runtime")
         role = raw_args.split()[0].lower()
         if role == "status":
             return self._meridian_watch_status(event.source)
-        if role not in {"philip", "fatih", "matthew"}:
-            return "Usage: `/meridian_watch [philip|fatih|matthew|status]`"
+        if role not in {"planner", "developer", "reviewer", "runtime"}:
+            return "Usage: `/meridian_watch [runtime|status]`"
         return await self._start_meridian_watch(event.source, role)
 
     async def _handle_meridian_unwatch_command(self, event: MessageEvent) -> str:
@@ -4658,10 +4656,10 @@ print(json.dumps(result))
         if not raw_args:
             session_key = self._session_key_for_source(event.source)
             self._set_meridian_flow(session_key, {"kind": "unwatch", "step": "role"})
-            return "Hangi watcher'ı kapatayım? `philip`, `fatih`, `matthew` ya da `all`"
+            return "Hangi watcher'ı kapatayım? `planner`, `developer`, `reviewer` ya da `all`"
         role = raw_args.split()[0].lower()
-        if role not in {"philip", "fatih", "matthew", "all"}:
-            return "Usage: `/meridian_unwatch [philip|fatih|matthew|all]`"
+        if role not in {"planner", "developer", "reviewer", "all"}:
+            return "Usage: `/meridian_unwatch [planner|developer|reviewer|all]`"
         return await self._stop_meridian_watch(event.source, role)
 
     async def _handle_meridian_ask_command(self, event: MessageEvent) -> str:
@@ -4671,10 +4669,10 @@ print(json.dumps(result))
         parts = raw_args.split(maxsplit=1) if raw_args else []
         if not parts:
             self._set_meridian_flow(session_key, {"kind": "ask", "step": "role"})
-            return "Kime yazayım? `philip`, `fatih`, `matthew`"
+            return "Kime yazayım? `planner`, `developer`, `reviewer`"
         role = parts[0].lower()
-        if role not in {"philip", "fatih", "matthew"}:
-            return "Role must be one of: `philip`, `fatih`, `matthew`."
+        if role not in {"planner", "developer", "reviewer"}:
+            return "Role must be one of: `planner`, `developer`, `reviewer`."
         if len(parts) == 1 or not parts[1].strip():
             self._set_meridian_flow(session_key, {"kind": "ask", "step": "message", "role": role})
             return f"`{role}` için mesajı yaz."
@@ -4738,7 +4736,7 @@ print(json.dumps(result))
             message=message,
             sender=sender,
         )
-        target_role = str(updated.metadata.get("target_role") or "philip")
+        target_role = str(updated.metadata.get("target_role") or "planner")
         return (
             f"✅ Added your reply to Meridian ticket `{updated.ticket_id}`.\n"
             f"Target role: `{target_role}`\n"
@@ -4803,7 +4801,7 @@ print(json.dumps(result))
         lines.extend(
             [
                 "",
-                "If you need to answer the team with context, use `/meridian_ask philip ...` or the relevant role.",
+                "If you need to answer the team with context, use `/meridian_ask planner ...` or the relevant role.",
             ]
         )
         return "\n".join(lines)
@@ -4827,22 +4825,22 @@ print(json.dumps(result))
             if role == "status":
                 self._clear_meridian_flow(session_key)
                 return self._meridian_watch_status(event.source)
-            if role not in {"philip", "fatih", "matthew"}:
-                return "Persona olarak `philip`, `fatih`, `matthew` ya da `status` yaz."
+            if role not in {"planner", "developer", "reviewer"}:
+                return "Persona olarak `planner`, `developer`, `reviewer` ya da `status` yaz."
             self._clear_meridian_flow(session_key)
             return await self._start_meridian_watch(event.source, role)
 
         if kind == "unwatch" and step == "role":
             role = text.lower()
-            if role not in {"philip", "fatih", "matthew", "all"}:
-                return "Watcher olarak `philip`, `fatih`, `matthew` ya da `all` yaz."
+            if role not in {"planner", "developer", "reviewer", "all"}:
+                return "Watcher olarak `planner`, `developer`, `reviewer` ya da `all` yaz."
             self._clear_meridian_flow(session_key)
             return await self._stop_meridian_watch(event.source, role)
 
         if kind == "ask" and step == "role":
             role = text.lower()
-            if role not in {"philip", "fatih", "matthew"}:
-                return "Role olarak `philip`, `fatih`, `matthew` yaz."
+            if role not in {"planner", "developer", "reviewer"}:
+                return "Role olarak `planner`, `developer`, `reviewer` yaz."
             self._set_meridian_flow(session_key, {"kind": "ask", "step": "message", "role": role})
             return f"`{role}` için mesajı yaz."
 
@@ -4914,7 +4912,7 @@ print(json.dumps(result))
 
     async def _stop_meridian_watch(self, source: "SessionSource", role: str) -> str:
         watchers = getattr(self, "_meridian_log_watchers", {})
-        roles = ("philip", "fatih", "matthew") if role == "all" else (role,)
+        roles = ("runtime", "planner", "developer", "reviewer") if role == "all" else (role,)
         stopped: list[str] = []
         for item in roles:
             key = self._meridian_watch_key(source, item)
@@ -4959,7 +4957,10 @@ print(json.dumps(result))
 
         from pathlib import Path
 
-        log_path = Path.home() / ".hermes" / "meridian" / "loops" / f"{role}.loop.log"
+        if role == "runtime":
+            log_path = Path.home() / ".hermes" / "meridian" / "runtime" / "meridian.log"
+        else:
+            log_path = Path.home() / ".hermes" / "meridian" / "loops" / f"{role}.loop.log"
         metadata = {"thread_id": source.thread_id} if source.thread_id else None
         position = log_path.stat().st_size if log_path.exists() else 0
         last_excerpt = ""
