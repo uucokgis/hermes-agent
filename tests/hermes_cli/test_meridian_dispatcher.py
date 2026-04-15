@@ -738,9 +738,9 @@ def test_meridian_command_status_prints_expected_fields(tmp_path, monkeypatch, c
     out = capsys.readouterr().out
     assert rc == 0
     assert "Meridian status" in out
-    assert "Active phase:   Planner" in out
+    assert "Active persona: philip" in out
     assert "Workflow state: backlog" in out
-    assert "Waiting on:     Planner" in out
+    assert "Waiting on:     philip" in out
     assert "backlog=1" in out
     assert "Next action:" in out
     assert "Why now:" in out
@@ -831,7 +831,7 @@ def test_meridian_command_go_once_runs_single_pass(tmp_path, monkeypatch, capsys
     assert rc == 0
     assert "Meridian go loop" in out
     assert "Pass 1" in out
-    assert "wake Developer for TASK-1" in out
+    assert "wake fatih for TASK-1" in out
 
 
 def test_meridian_command_go_prints_remote_hint_when_workspace_is_not_local(monkeypatch, capsys):

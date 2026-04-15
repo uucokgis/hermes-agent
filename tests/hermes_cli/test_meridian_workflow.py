@@ -246,7 +246,7 @@ def test_transition_in_progress_to_review_accepts_commit_branch_and_verification
 
     assert result["to_queue"] == "review"
     document = locate_task(workspace, "TASK-1")
-    assert document.metadata["reviewer"] == "reviewer"
+    assert document.metadata["reviewer"] == "matthew"
 
 
 def test_transition_review_to_done_requires_pushed_metadata(tmp_path):
@@ -362,4 +362,4 @@ def test_transition_to_review_writes_to_active_review_queue(tmp_path):
     assert moved.exists()
     document = locate_task(workspace, "TASK-1")
     assert document.path == moved
-    assert document.metadata["reviewer"] == "reviewer"
+    assert document.metadata["reviewer"] == "matthew"

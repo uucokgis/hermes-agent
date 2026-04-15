@@ -573,11 +573,11 @@ def transition_task(
         document.metadata.pop("claim_expires_at", None)
         document.metadata.pop("waiting_on", None)
     elif to_queue == "review":
-        document.metadata["reviewer"] = "reviewer"
+        document.metadata["reviewer"] = "matthew"
         document.metadata.pop("waiting_on", None)
     elif to_queue == "in_progress":
         document.metadata.pop("waiting_on", None)
-        document.metadata.setdefault("assigned_to", "developer")
+        document.metadata.setdefault("assigned_to", "fatih")
 
     _append_history(
         document.metadata,

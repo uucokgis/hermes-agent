@@ -1,12 +1,12 @@
 ---
 name: meridian-workflow
-description: Use when a user asks Hermes directly to handle Meridian work. One agent takes the task from shaping through branch, implementation, commit, review, push, and merge.
-version: 2.0.0
+description: Use when a user asks Hermes directly to handle Meridian work. One agent should take the task from shaping through branch, implementation, commit, review, push, and merge.
+version: 1.2.0
 author: Hermes Agent
 metadata:
   hermes:
-    tags: [meridian, workflow, orchestration, single-agent]
-    related_skills: [meridian-planner, meridian-developer, meridian-reviewer]
+    tags: [meridian, workflow, orchestration, philip, fatih, matthew]
+    related_skills: [meridian-philip, meridian-fatih, meridian-matthew]
 ---
 
 # Meridian Workflow
@@ -19,17 +19,17 @@ Use this when the user talks to Hermes directly about Meridian work, for example
 ## Goal
 
 Run Meridian work end-to-end inside one agent session:
-1. Shape the task with Planner-style product clarity when needed.
-2. Implement with Developer-style execution discipline.
-3. Re-read the diff with Reviewer-style eyes before push or merge.
+1. Shape the task with Philip-style product clarity when needed.
+2. Implement with Fatih-style execution discipline.
+3. Re-read the diff with Matthew-style reviewer eyes before push or merge.
 4. Keep support and waiting-human inputs durable in `customer_support/` or `tasks/` when async follow-up is needed.
 
 This is linear and deterministic, not polling-driven.
 
 ## Core Rules
 
-- New user work enters the single agent first; use the Planner lens only to clarify scope and acceptance criteria.
-- If a Meridian-related request comes from Telegram or another async inbox and does not require an immediate synchronous answer, record it into `customer_support/` first so the Planner lens can process it later.
+- New user work enters the single agent first; use the Philip lens only to clarify scope and acceptance criteria.
+- If a Meridian-related request comes from Telegram or another async inbox and does not require an immediate synchronous answer, record it into `customer_support/` first so Philip can process it later.
 - Work one task at a time in one branch unless the user explicitly asks for a broader release train.
 - Prefer the existing Meridian task system over ad-hoc status tracking.
 - Treat `customer_support/` as a durable inbox outside the delivery queues.
@@ -38,14 +38,14 @@ This is linear and deterministic, not polling-driven.
 - Make at least one task-scoped commit before review.
 - Run a fresh self-review pass after implementation and before push/merge.
 - If no meaningful next action exists, stop and report status instead of looping.
-- Do not assume separate always-on daemons exist. There is one agent.
+- Do not assume separate always-on Philip, Fatih, or Matthew daemons exist.
 
 ## Working Lenses
 
 When you need a stronger posture for a phase, load the matching skill:
-- `skill_view(name="meridian-planner")` — task intake, acceptance criteria, backlog
-- `skill_view(name="meridian-developer")` — implementation, commits, verify.sh
-- `skill_view(name="meridian-reviewer")` — code review, architecture, security
+- `skill_view(name="meridian-philip")`
+- `skill_view(name="meridian-fatih")`
+- `skill_view(name="meridian-matthew")`
 
 These are lenses for the same agent session, not separate workers.
 
@@ -61,7 +61,7 @@ When the user gives a new Meridian request:
 
 ### Implementation
 
-Switch into the Developer lens only when:
+Switch into the Fatih lens only when:
 - a task exists in `tasks/ready/`, and
 - there is no more urgent unfinished review loop to resolve
 
@@ -76,7 +76,7 @@ During coding:
 
 ### Review
 
-Switch into the Reviewer lens when:
+Switch into the Matthew lens when:
 - a task reaches `tasks/review/`, or
 - the user explicitly asks for architectural/security review
 
@@ -85,13 +85,13 @@ During review:
 - decide whether the work is ready, needs changes, or requires human input
 - fix only tiny review-contained issues when that is clearly safer than bouncing the task back
 
-If the Reviewer pass requests changes:
+If the Matthew pass requests changes:
 - stay on the same task branch
 - apply the fixes
 - commit again
-- re-run the Reviewer lens before push or merge
+- re-run the review lens before push or merge
 
-If the Reviewer pass approves:
+If the Matthew pass approves:
 - push the task branch
 - merge with `main` using the repo's normal policy
 - move the task to `done/` unless the workflow explicitly requires `waiting_human`
@@ -108,7 +108,7 @@ When deciding the next step, prefer:
 
 - If all work points at one live project checkout, parallel code editing is unsafe.
 - Prefer one active implementation branch at a time.
-- Treat the Planner and Reviewer lenses as read-heavy mindsets unless a tiny review-contained fix is clearly lower risk.
+- Treat Philip and Matthew as read-heavy review/planning mindsets unless a tiny review-contained fix is clearly lower risk.
 
 ## Efficiency Rules
 

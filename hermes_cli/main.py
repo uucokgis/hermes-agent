@@ -5164,7 +5164,7 @@ For more help on a command:
 
     meridian_review_transition = meridian_subparsers.add_parser(
         "review-transition",
-        help="Preview or apply a structured review transition recommendation",
+        help="Preview or apply a structured Matthew review transition recommendation",
     )
     meridian_review_transition.add_argument("task_id", help="Task id or filename")
     meridian_review_transition.add_argument(

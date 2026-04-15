@@ -137,8 +137,8 @@ def test_build_roles_status_text_includes_workspace_queue_focus_and_commits(tmp_
     assert "Layer visibility" in text
     assert "Recent Commits" in text
     assert "Friendly PHILIP-20260405-010-design-and-scope-drawing-editor-workflow" in text
-    assert "Planner" in text
-    assert "Reviewer" in text
+    assert "Philip" in text
+    assert "Matthew" in text
 
 
 def test_build_roles_status_text_uses_ssh_probe_when_local_workspace_missing(monkeypatch):
