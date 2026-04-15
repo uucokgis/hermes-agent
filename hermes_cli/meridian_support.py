@@ -18,7 +18,15 @@ from hermes_cli.meridian_dispatcher import _resolve_workspace_path
 from hermes_cli.meridian_workflow import load_task_document, queue_dir_candidates
 
 
+# Internal role keys used in loop logs and state files.
+# Legacy keys (philip/fatih/matthew) are kept for backward compatibility with
+# existing state files and log headers written by meridian-role-loop.sh.
 ROLE_NAMES = ("philip", "fatih", "matthew")
+ROLE_DISPLAY_NAMES: dict[str, str] = {
+    "philip": "Planner",
+    "fatih": "Developer",
+    "matthew": "Reviewer",
+}
 SUPPORT_QUEUES = ("inbox", "responded", "summaries")
 HEADER_RE = re.compile(r"^=== (?P<timestamp>\S+) \[(?P<role>[a-z]+)\] profile=(?P<profile>\S+) workspace=(?P<workspace>.+) ===$")
 MERIDIAN_QUEUE_NAMES = ("backlog", "ready", "in_progress", "review", "waiting_human", "done", "debt")
@@ -134,9 +142,9 @@ def create_support_ticket(
 ) -> MeridianTicket:
     root = ensure_support_dirs(workspace)
     current = now or _utcnow()
-    role = (target_role or "").strip().lower() or "philip"
-    if role not in ROLE_NAMES:
-        role = "philip"
+    role = (target_role or "").strip().lower() or "agent"
+    if role not in ROLE_NAMES and role != "agent":
+        role = "agent"
     ticket_id = _next_ticket_id(root, now=current)
     metadata = {
         "ticket_id": ticket_id,
@@ -220,21 +228,29 @@ def append_human_reply(
     return MeridianTicket(ticket_id=ticket.ticket_id, path=ticket.path, queue=ticket.queue, metadata=metadata, body=body)
 
 
+def _role_display(role_key: str | None) -> str:
+    """Map an internal role key to a human-facing display name."""
+    if not role_key:
+        return "Agent"
+    return ROLE_DISPLAY_NAMES.get(role_key, role_key.title())
+
+
 def format_ticket_summary(ticket: MeridianTicket) -> str:
     summary = str(ticket.metadata.get("summary") or ticket.ticket_id)
-    role = str(ticket.metadata.get("target_role") or "philip")
+    role_key = str(ticket.metadata.get("target_role") or "agent")
     status = str(ticket.metadata.get("status") or ticket.queue)
     updated = str(ticket.metadata.get("updated_at") or "")
-    return f"`{ticket.ticket_id}` [{role}] {summary} ({status}, {updated[:16].replace('T', ' ')})"
+    return f"`{ticket.ticket_id}` [{_role_display(role_key)}] {summary} ({status}, {updated[:16].replace('T', ' ')})"
 
 
 def format_ticket_detail(ticket: MeridianTicket) -> str:
     metadata = ticket.metadata
+    role_key = str(metadata.get("target_role") or "agent")
     lines = [
         f"🎫 **Meridian Ticket `{ticket.ticket_id}`**",
         "",
         f"**Summary:** {metadata.get('summary', '')}",
-        f"**Target Role:** `{metadata.get('target_role', 'philip')}`",
+        f"**Assigned to:** `{_role_display(role_key)}`",
         f"**Status:** `{metadata.get('status', ticket.queue)}`",
         f"**Queue:** `{ticket.queue}`",
         f"**Updated:** {str(metadata.get('updated_at', ''))[:19].replace('T', ' ')}",
@@ -732,7 +748,8 @@ def build_roles_status_text(workspace: str | Path | None = None) -> str:
     for role in ROLE_NAMES:
         state = role_loop_state(role)
         status = "running" if state["running"] else "stopped"
-        lines.append(f"**{role.title()}**: `{status}`")
+        display = ROLE_DISPLAY_NAMES.get(role, role.title())
+        lines.append(f"**{display}**: `{status}`")
         lines.append(state["summary"])
         lines.append("")
     return "\n".join(lines).strip()
