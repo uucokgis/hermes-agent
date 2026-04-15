@@ -204,6 +204,23 @@ Single-slot rules (STRICT):
 - Keep changes narrow, production-safe, and easy to review.
 - Do not do backlog shaping, support triage, or broad PM work in this pass.
 
+Blocker escalation rule (IMPORTANT):
+If you hit an infrastructure or environment blocker that you CANNOT resolve yourself — such as:
+  - missing system library (GDAL, GEOS, PROJ, etc.) not installable inside the container
+  - SSL/TLS certificate issue outside your control
+  - missing secret, credential, or API key you don't have access to
+  - broken CI environment or test runner that is a machine-level issue
+  - any other "needs human hands on the machine" problem
+Then you MUST:
+  1. transition the task from in_progress → waiting_human using task_transition
+  2. write a clear blocker note in the task file:
+     - exactly what you tried (commands, error output)
+     - what is missing and why you can't install/fix it yourself
+     - what the human needs to do to unblock you
+  3. stop this pass cleanly — do NOT keep retrying the same failing approach
+  4. do NOT pretend the task is done or move it to review with a broken verification
+The human (Umut) monitors waiting_human via Telegram and will resolve blockers directly.
+
 Canonical Developer role body:
 $(render_skill_body developer)
 EOF
