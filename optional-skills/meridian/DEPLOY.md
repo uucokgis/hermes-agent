@@ -29,8 +29,8 @@ echo "Skills deployed."
 
 ```bash
 MERIDIAN_DOCS="/Users/umut/Projects/hermes-agent/docs/meridian"
-REMOTE107="umut@192.168.1.107"
-MERIDIAN_PROJ="/home/umut/meridian/docs/llm"
+REMOTE107="umut@remote.example.com"
+MERIDIAN_PROJ="/home/umut/Meridian/docs/llm"
 
 ssh $REMOTE107 "mkdir -p $MERIDIAN_PROJ"
 scp $MERIDIAN_DOCS/agentic-workflow.md $REMOTE107:$MERIDIAN_PROJ/agentic-workflow.md

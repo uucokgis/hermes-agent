@@ -197,7 +197,7 @@ def test_run_meridian_doctor_uses_remote_target_when_local_missing(monkeypatch):
         lambda workspace: type(
             "_Target",
             (),
-            {"mode": "ssh", "workspace": "/home/umut/meridian", "host": "192.168.1.107", "user": "umut"},
+            {"mode": "ssh", "workspace": "/home/umut/Meridian", "host": "192.168.1.107", "user": "umut"},
         )(),
     )
     monkeypatch.setattr(
@@ -205,9 +205,9 @@ def test_run_meridian_doctor_uses_remote_target_when_local_missing(monkeypatch):
         lambda target: captured.setdefault("report", {"workspace": target.workspace, "healthy": True}),
     )
 
-    report = run_meridian_doctor("/home/umut/meridian")
+    report = run_meridian_doctor("/home/umut/Meridian")
 
-    assert report["workspace"] == "/home/umut/meridian"
+    assert report["workspace"] == "/home/umut/Meridian"
     assert report["healthy"] is True
 
 
@@ -217,7 +217,7 @@ def test_run_migrations_use_remote_target_when_local_missing(monkeypatch):
         lambda workspace: type(
             "_Target",
             (),
-            {"mode": "ssh", "workspace": "/home/umut/meridian", "host": "192.168.1.107", "user": "umut"},
+            {"mode": "ssh", "workspace": "/home/umut/Meridian", "host": "192.168.1.107", "user": "umut"},
         )(),
     )
     monkeypatch.setattr(
@@ -229,10 +229,10 @@ def test_run_migrations_use_remote_target_when_local_missing(monkeypatch):
         lambda target, apply=False: {"workspace": target.workspace, "apply": apply, "items": [], "summary": {}},
     )
 
-    in_progress = run_migrate_in_progress_queue("/home/umut/meridian", apply=True)
-    review = run_migrate_review_queue("/home/umut/meridian", apply=False)
+    in_progress = run_migrate_in_progress_queue("/home/umut/Meridian", apply=True)
+    review = run_migrate_review_queue("/home/umut/Meridian", apply=False)
 
-    assert in_progress["workspace"] == "/home/umut/meridian"
+    assert in_progress["workspace"] == "/home/umut/Meridian"
     assert in_progress["apply"] is True
-    assert review["workspace"] == "/home/umut/meridian"
+    assert review["workspace"] == "/home/umut/Meridian"
     assert review["apply"] is False

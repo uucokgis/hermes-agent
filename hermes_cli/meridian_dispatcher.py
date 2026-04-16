@@ -1280,7 +1280,7 @@ def meridian_command(args) -> int:
                 )
                 print(
                     "Open a focused Meridian session on the Hermes machine and work directly "
-                    f"against {remote_cwd or '/home/umut/meridian'}: shape the task, create a branch, "
+                    f"against {remote_cwd or '/home/umut/Meridian'}: shape the task, create a branch, "
                     "implement, commit, review with fresh eyes, then push and merge."
                 )
             return 1

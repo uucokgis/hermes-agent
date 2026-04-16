@@ -4,7 +4,7 @@ Meridian Board — Jira-style kanban dashboard server.
 Reads task files from the workspace and serves a web UI.
 
 Usage:
-    python3 meridian-board-server.py [--port 8765] [--workspace /home/umut/meridian]
+    python3 meridian-board-server.py [--port 8765] [--workspace /home/umut/Meridian]
 """
 
 import argparse

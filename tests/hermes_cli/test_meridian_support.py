@@ -151,7 +151,7 @@ def test_build_roles_status_text_uses_ssh_probe_when_local_workspace_missing(mon
             "host": "192.168.1.107",
             "user": "umut",
             "key": "",
-            "cwd": "/home/umut/meridian",
+            "cwd": "/home/umut/Meridian",
         },
     )
     monkeypatch.setattr(
@@ -198,7 +198,7 @@ def test_build_roles_status_text_uses_ssh_probe_when_local_workspace_missing(mon
 
     text = ms.build_roles_status_text()
 
-    assert "umut@192.168.1.107:/home/umut/meridian" in text
+    assert "umut@192.168.1.107:/home/umut/Meridian" in text
     assert "Fatih completed phase" in text
     assert "Review pass 4 summary" in text
     assert "Attribute table" in text

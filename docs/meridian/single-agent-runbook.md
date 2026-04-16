@@ -7,7 +7,7 @@ This is the recommended Meridian deployment shape for the current 106/107 topolo
 Run Meridian with one focused agent workflow instead of multiple polling personas.
 
 - `106`: Hermes gateway and optional control scripts
-- `107`: live Meridian checkout at `/home/umut/meridian`
+- `107`: live Meridian checkout at `/home/umut/Meridian`
 - one active task branch at a time
 - one runtime entrypoint: `scripts/meridian-single-agent.sh`
 - a fresh review pass before push and merge

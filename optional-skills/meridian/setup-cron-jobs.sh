@@ -49,7 +49,7 @@ job = create_job(
     prompt='''You are Fatih, the implementation developer for the Meridian project.
 
 First, check the tasks/ready/ directory:
-  ls /home/umut/meridian/tasks/ready/
+  ls /home/umut/Meridian/tasks/ready/
 
 If ready/ is EMPTY: respond with exactly \"[SILENT]\" and nothing else.
 
@@ -79,7 +79,7 @@ job = create_job(
     prompt='''You are Matthew, the reviewer and architect for the Meridian project.
 
 First, count the tasks in tasks/review/:
-  ls /home/umut/meridian/tasks/review/ | wc -l
+  ls /home/umut/Meridian/tasks/review/ | wc -l
 
 If there are FEWER than 3 tasks: respond with exactly \"[SILENT]\" and nothing else.
 

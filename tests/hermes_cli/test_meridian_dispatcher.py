@@ -124,17 +124,17 @@ def test_collect_snapshot_explicit_missing_workspace_raises_clear_error_with_rem
             "terminal": {
                 "backend": "ssh",
                 "ssh_host": "192.168.1.107",
-                "cwd": "/home/umut/meridian",
+                "cwd": "/home/umut/Meridian",
             }
         },
     )
 
     with pytest.raises(FileNotFoundError) as exc:
-        md.collect_meridian_snapshot("/home/umut/meridian")
+        md.collect_meridian_snapshot("/home/umut/Meridian")
 
     message = str(exc.value)
     assert "does not exist on this machine" in message
-    assert "192.168.1.107:/home/umut/meridian" in message
+    assert "192.168.1.107:/home/umut/Meridian" in message
 
 
 def test_collect_snapshot_keeps_review_loop_locked_to_in_progress_task(tmp_path, monkeypatch):
@@ -842,17 +842,17 @@ def test_meridian_command_go_prints_remote_hint_when_workspace_is_not_local(monk
         "run_meridian_go_loop",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             FileNotFoundError(
-                "Meridian workspace does not exist on this machine: /home/umut/meridian. "
-                "Remote terminal backend points to 192.168.1.107:/home/umut/meridian."
+                "Meridian workspace does not exist on this machine: /home/umut/Meridian. "
+                "Remote terminal backend points to 192.168.1.107:/home/umut/Meridian."
             )
         ),
     )
-    monkeypatch.setattr(md, "_terminal_remote_hint", lambda: ("192.168.1.107", "/home/umut/meridian"))
+    monkeypatch.setattr(md, "_terminal_remote_hint", lambda: ("192.168.1.107", "/home/umut/Meridian"))
 
     rc = md.meridian_command(
         Namespace(
             meridian_command="go",
-            workspace="/home/umut/meridian",
+            workspace="/home/umut/Meridian",
             sleep=15.0,
             idle_sleep=60.0,
             max_passes=None,

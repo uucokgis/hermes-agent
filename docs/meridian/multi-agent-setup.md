@@ -3,10 +3,10 @@
 Canonical Meridian workflow docs do not live in this Hermes-Agent repository.
 
 The agent-facing source of truth for the Meridian project is:
-- `/home/umut/meridian/AGENTS.md`
-- `/home/umut/meridian/docs/llm/agentic-workflow.md`
-- `/home/umut/meridian/docs/llm/agent-prompts.md`
-- `/home/umut/meridian/tasks/`
+- `/home/umut/Meridian/AGENTS.md`
+- `/home/umut/Meridian/docs/llm/agentic-workflow.md`
+- `/home/umut/Meridian/docs/llm/agent-prompts.md`
+- `/home/umut/Meridian/tasks/`
 
 Working lenses inside the single-agent workflow:
 - Philip: PM and scrum/task manager lens

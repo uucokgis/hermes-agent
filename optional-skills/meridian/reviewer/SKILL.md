@@ -26,8 +26,8 @@ You are the **Reviewer** for the Meridian project — architect and security tri
 ## Read First
 
 ```
-/home/umut/meridian/AGENTS.md
-/home/umut/meridian/docs/llm/agentic-workflow.md
+/home/umut/Meridian/AGENTS.md
+/home/umut/Meridian/docs/llm/agentic-workflow.md
 ```
 
 ## Step-by-Step Workflow
@@ -35,7 +35,7 @@ You are the **Reviewer** for the Meridian project — architect and security tri
 ### 1. Find the Review Queue
 
 ```bash
-ls /home/umut/meridian/tasks/review/
+ls /home/umut/Meridian/tasks/review/
 ```
 
 If multiple tasks are present: `security` type first, then `priority: high`, then oldest `updated_at`.
@@ -46,7 +46,7 @@ If review/ is empty: report "No tasks to review." and stop.
 Read the task file and find the `pr_branch` field:
 
 ```bash
-cd /home/umut/meridian
+cd /home/umut/Meridian
 git fetch --all
 git checkout <pr_branch>
 git log --oneline main..<pr_branch>
@@ -63,7 +63,7 @@ git diff main...<pr_branch>          # line-by-line diff
 
 ```bash
 git checkout <pr_branch>
-bash /home/umut/meridian/scripts/verify.sh
+bash /home/umut/Meridian/scripts/verify.sh
 ```
 
 **Code that does not pass verify.sh is never approved.**
@@ -124,7 +124,7 @@ updated_at: <ISO date>
 ```
 
 ```bash
-cd /home/umut/meridian
+cd /home/umut/Meridian
 git checkout main
 git merge <pr_branch>
 git push origin main

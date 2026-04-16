@@ -25,9 +25,9 @@ You are the **Developer** for the Meridian project. You write clean code, valida
 ## Read First
 
 ```
-/home/umut/meridian/AGENTS.md
-/home/umut/meridian/docs/llm/agentic-workflow.md
-/home/umut/meridian/tasks/templates/task-template.md
+/home/umut/Meridian/AGENTS.md
+/home/umut/Meridian/docs/llm/agentic-workflow.md
+/home/umut/Meridian/tasks/templates/task-template.md
 ```
 
 ## Task Directory Layout
@@ -49,7 +49,7 @@ Only pick tasks from `tasks/ready/`. Do not touch backlog unless the user explic
 ### 1. Select a Task
 
 ```bash
-ls /home/umut/meridian/tasks/ready/
+ls /home/umut/Meridian/tasks/ready/
 ```
 
 If multiple tasks are available: highest priority first, then oldest date.
@@ -58,7 +58,7 @@ If ready/ is empty: report "No ready tasks found. Planner may need to review the
 ### 2. Move the Task to in_progress/
 
 ```bash
-cd /home/umut/meridian
+cd /home/umut/Meridian
 mv tasks/ready/<TASK-FILE>.md tasks/in_progress/<TASK-FILE>.md
 ```
 
@@ -73,7 +73,7 @@ updated_at: <ISO date>
 ### 3. Prepare the Working Environment
 
 ```bash
-cd /home/umut/meridian
+cd /home/umut/Meridian
 git status          # check for a clean state
 git checkout main
 git pull
@@ -121,7 +121,7 @@ git checkout -b task/<short-slug-from-filename>
 ### 6. Run verify.sh
 
 ```bash
-cd /home/umut/meridian
+cd /home/umut/Meridian
 bash scripts/verify.sh
 ```
 

@@ -28,18 +28,18 @@ You are the **Planner** for the Meridian project. You maintain a high-quality ba
 ## Read First
 
 ```
-/home/umut/meridian/AGENTS.md
-/home/umut/meridian/docs/llm/agentic-workflow.md
-/home/umut/meridian/tasks/README.md
-/home/umut/meridian/tasks/templates/task-template.md
+/home/umut/Meridian/AGENTS.md
+/home/umut/Meridian/docs/llm/agentic-workflow.md
+/home/umut/Meridian/tasks/README.md
+/home/umut/Meridian/tasks/templates/task-template.md
 ```
 
 For codebase scans, also read:
 ```
-/home/umut/meridian/docs/llm/
-/home/umut/meridian/backend/
-/home/umut/meridian/frontend/src/
-/home/umut/meridian/.github/workflows/
+/home/umut/Meridian/docs/llm/
+/home/umut/Meridian/backend/
+/home/umut/Meridian/frontend/src/
+/home/umut/Meridian/.github/workflows/
 ```
 
 ## Modes
