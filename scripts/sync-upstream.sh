@@ -41,6 +41,10 @@ fi
 
 cd "$repo_dir"
 
+if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+  die "A git merge or rebase is already in progress. Resolve it before syncing."
+fi
+
 current_branch="$(git branch --show-current)"
 
 if [ "$current_branch" != "$main_branch" ]; then
@@ -89,7 +93,7 @@ else
 
   if [ "$sync_strategy" = "rebase" ]; then
     echo "Rebasing your '$main_branch' commits onto '$upstream_ref'..."
-    git rebase "$upstream_ref"
+    GIT_EDITOR=true git rebase --autostash "$upstream_ref"
   else
     echo "Merging '$upstream_ref' into '$main_branch'..."
     git merge --no-edit "$upstream_ref"

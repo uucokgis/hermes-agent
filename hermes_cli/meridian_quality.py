@@ -25,7 +25,7 @@ from hermes_cli.meridian_runtime import EVENT_LOG_PATH, emit_meridian_event, par
 from hermes_cli.meridian_review import is_review_decision_artifact
 
 
-DEFAULT_REMOTE_WORKSPACE = "/home/umut/meridian"
+DEFAULT_REMOTE_WORKSPACE = str(Path.home() / "Meridian")
 DEFAULT_EVENT_TYPES = frozenset({"task_transitioned"})
 DEFAULT_REVIEW_QUEUE = "review"
 SEVERITY_ORDER = {"blocking": 0, "review": 1, "debt": 2, "advisory": 3, "passed": 4, "skipped": 5}

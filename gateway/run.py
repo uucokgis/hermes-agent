@@ -4477,7 +4477,7 @@ class GatewayRunner:
     def _meridian_board_text(self) -> str:
         import json, os
 
-        workspace = (os.getenv("HERMES_MERIDIAN_WORKSPACE") or "/home/umut/meridian").strip()
+        workspace = (os.getenv("HERMES_MERIDIAN_WORKSPACE") or os.path.expanduser("~/Meridian")).strip()
         queue_order = ("backlog", "ready", "in_progress", "review", "waiting_human", "done", "debt")
         # Aliases: in_progress dir might be named "in-progress" on remote
         aliases = {"in_progress": "in-progress"}

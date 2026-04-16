@@ -15,7 +15,7 @@ if [[ ! -x "$SINGLE_AGENT_SCRIPT" ]]; then
 fi
 
 ROLE="${1:-}"
-WORKSPACE="${2:-${HERMES_MERIDIAN_WORKSPACE:-/home/umut/meridian}}"
+WORKSPACE="${2:-${HERMES_MERIDIAN_WORKSPACE:-$HOME/Meridian}}"
 
 if [[ -z "$ROLE" ]]; then
   echo "Usage: $0 <planner|developer|reviewer> [workspace]" >&2

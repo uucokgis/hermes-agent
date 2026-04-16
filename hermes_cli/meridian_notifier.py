@@ -58,7 +58,7 @@ def _ssh_env() -> dict[str, str] | None:
     user = os.getenv("HERMES_MERIDIAN_NOTIFY_SSH_USER", "").strip()
     key = os.getenv("HERMES_MERIDIAN_NOTIFY_SSH_KEY", "").strip()
     password = os.getenv("HERMES_MERIDIAN_NOTIFY_SSH_PASSWORD", "").strip()
-    workspace = os.getenv("HERMES_MERIDIAN_NOTIFY_WORKSPACE", "").strip() or "/home/umut/meridian"
+    workspace = os.getenv("HERMES_MERIDIAN_NOTIFY_WORKSPACE", "").strip() or str(Path.home() / "Meridian")
     if not host or not user:
         return None
     return {

@@ -109,7 +109,7 @@ def _maintenance_ssh_settings(explicit_workspace: str | None = None) -> dict[str
             "user": user,
             "key": key,
             "password": env_password,
-            "workspace": workspace or "/home/umut/meridian",
+            "workspace": workspace or str(Path.home() / "Meridian"),
         }
     return None
 

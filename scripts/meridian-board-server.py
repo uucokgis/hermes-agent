@@ -626,7 +626,7 @@ setInterval(loadBoard,30000);
 # HTTP handler
 # ---------------------------------------------------------------------------
 
-WORKSPACE: Path = Path("/home/umut/meridian")
+WORKSPACE: Path = Path.home() / "Meridian"
 
 
 class BoardHandler(BaseHTTPRequestHandler):
@@ -686,7 +686,7 @@ def main():
     global WORKSPACE
     ap = argparse.ArgumentParser(description="Meridian Board Server")
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--workspace", default="/home/umut/meridian")
+    ap.add_argument("--workspace", default=str(Path.home() / "Meridian"))
     ap.add_argument("--host", default="0.0.0.0")
     args = ap.parse_args()
 
